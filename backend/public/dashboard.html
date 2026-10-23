@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>AIoT Control Desk</title>
+  <style>
+    :root {
+      font-family: "Segoe UI", Arial, sans-serif;
+      color: #253341;
+      background: #f3f5f7;
+      color-scheme: light;
+      font-synthesis: none;
+      text-rendering: optimizeLegibility;
+      --muted: #637282;
+      --line: #d9e0e6;
+      --green: #2f855a;
+      --red: #bd4b45;
+      --blue: #4f7394;
+      --teal: #54877b;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #f3f5f7; }
+    button { font: inherit; color: inherit; }
+    .shell { width: min(1080px, calc(100% - 40px)); margin: auto; padding: 26px 0 40px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 34px; }
+    .brand { display: flex; align-items: center; gap: 11px; }
+    .brand-icon { width: 36px; height: 36px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--blue); }
+    .brand-name { font-size: 13px; font-weight: 700; letter-spacing: .06em; }
+    .brand-sub { margin-top: 3px; color: var(--muted); font-size: 12px; }
+    .connection { display: flex; align-items: center; gap: 9px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: #425262; font-size: 12px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #8a96a0; }
+    .connection.online .dot { background: var(--green); }
+    .connection.offline .dot { background: var(--red); }
+    .intro { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 18px; }
+    .eyebrow { color: var(--blue); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+    .intro h1 { margin: 7px 0; font-size: 32px; font-weight: 650; letter-spacing: -.025em; line-height: 1.15; }
+    .intro p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .device-select { min-width: 220px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: #253341; }
+    .device-select:focus, .chat-input:focus { outline: 2px solid #a8bfce; outline-offset: 1px; }
+    .grid { display: grid; grid-template-columns: 1.3fr .7fr; gap: 14px; }
+    .card { padding: 19px; border: 1px solid var(--line); border-radius: 10px; background: #fff; box-shadow: 0 1px 2px #182b3a0a; }
+    .card-head { display: flex; align-items: center; justify-content: space-between; gap: 15px; }
+    .card-title { color: #283847; font-size: 14px; font-weight: 650; }
+    .card-note { color: var(--muted); font-size: 11px; }
+    .metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+    .metric { min-width: 0; padding: 14px; border: 1px solid #e1e6eb; border-radius: 8px; background: #fafbfc; }
+    .metric-top { display: flex; align-items: center; justify-content: space-between; color: #526170; font-size: 11px; font-weight: 600; }
+    .metric-icon { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 6px; background: #edf1f4; color: #526e85; }
+    .metric-value { margin-top: 9px; color: #263746; font-size: 36px; font-weight: 650; letter-spacing: -.035em; }
+    .metric-value small { color: var(--muted); font-size: 15px; font-weight: 500; }
+    .metric-foot { margin-top: 2px; color: var(--muted); font-size: 10px; }
+    .chart-area { margin-top: 12px; padding-top: 9px; border-top: 1px solid #e7ebef; }
+    .chart-heading { margin-bottom: 2px; color: #687786; font-size: 10px; }
+    .chart { width: 100%; min-height: 92px; }
+    .chart svg { display: block; width: 100%; height: 92px; overflow: visible; }
+    .chart-grid { stroke: #e1e6eb; stroke-width: 1; }
+    .chart-axis { fill: #73808c; font-size: 9px; }
+    .chart-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .chart-point { stroke: #fff; stroke-width: 1.5; }
+    .chart-empty { height: 92px; display: grid; place-items: center; color: #788692; font-size: 11px; }
+    .led-card { display: flex; flex-direction: column; min-height: 100%; }
+    .led-state { display: flex; align-items: center; gap: 10px; margin: 24px 0 20px; }
+    .bulb { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 8px; background: #f3f5f7; color: #82909c; }
+    .bulb.on { border-color: #b6c9bb; background: #edf5ef; color: #36734b; }
+    .led-label { font-size: 20px; font-weight: 650; letter-spacing: -.02em; }
+    .led-caption { margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .led-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: auto; }
+    .action { display: flex; align-items: center; justify-content: center; gap: 9px; padding: 11px; border: 1px solid #cbd5dd; border-radius: 7px; background: #fff; cursor: pointer; }
+    .action:hover:not(:disabled) { border-color: #7d99ad; background: #f5f8fa; }
+    .action.active { border-color: #7d99ad; background: #edf3f7; color: #355a76; }
+    .action:disabled { opacity: .45; cursor: not-allowed; }
+    .busy-label { height: 18px; margin-top: 12px; color: #806b3d; font-size: 11px; }
+    .details { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+    .detail-row { display: flex; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid #e8ecef; font-size: 11px; }
+    .detail-row:last-child { padding-bottom: 0; border-bottom: 0; }
+    .detail-row span:first-child, .footer { color: var(--muted); }
+    .detail-row span:last-child { color: #354555; text-align: right; }
+    .activity { display: flex; flex-direction: column; max-height: 180px; margin-top: 10px; overflow: auto; }
+    .activity-item { display: flex; align-items: flex-start; gap: 9px; padding: 9px 0; border-bottom: 1px solid #e8ecef; }
+    .activity-mark { width: 6px; height: 6px; flex: none; margin-top: 5px; border-radius: 50%; }
+    .activity-copy { color: #354555; font-size: 11px; line-height: 1.45; }
+    .activity-time { margin-top: 3px; color: #788692; font-size: 10px; }
+    .empty { margin-top: 22px; padding: 25px 16px; border: 1px dashed #cbd5dd; border-radius: 8px; background: #fff; color: var(--muted); font-size: 12px; line-height: 1.7; text-align: center; }
+    .toast { position: fixed; z-index: 5; right: 20px; bottom: 20px; max-width: calc(100% - 40px); padding: 10px 14px; transform: translateY(12px); border: 1px solid #263746; border-radius: 7px; background: #263746; color: #fff; font-size: 12px; opacity: 0; pointer-events: none; transition: .2s; }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast.error { border-color: #9e4742; background: #9e4742; color: #fff; }
+    .footer { display: flex; justify-content: space-between; gap: 16px; margin-top: 17px; font-size: 10px; }
+    .chat-card { grid-column: 1 / -1; margin-top: 14px; }
+    .conversation { display: flex; flex-direction: column; gap: 10px; max-height: 280px; padding: 14px 2px; overflow: auto; }
+    .chat-empty { padding: 15px 8px; color: var(--muted); font-size: 12px; text-align: center; }
+    .bubble-row { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; max-width: min(80%, 680px); }
+    .bubble-row.user { align-self: flex-end; align-items: flex-end; }
+    .bubble-name { padding: 0 5px; color: #74818d; font-size: 10px; }
+    .bubble { padding: 10px 12px; border: 1px solid #dfe5ea; border-radius: 8px 8px 8px 3px; background: #f6f8f9; color: #2c3b49; font-size: 12px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .bubble-row.user .bubble { border-color: #d4e0e8; border-radius: 8px 8px 3px 8px; background: #edf3f7; }
+    .bubble.pending { color: #657483; }
+    .chat-form { display: flex; align-items: stretch; gap: 9px; padding-top: 13px; border-top: 1px solid #e3e8ec; }
+    .chat-input { flex: 1; min-height: 46px; max-height: 140px; padding: 11px 12px; border: 1px solid #cbd5dd; border-radius: 7px; background: #fff; color: #253341; font: inherit; font-size: 12px; line-height: 1.5; resize: vertical; }
+    .chat-input:disabled { opacity: .5; }
+    .send-button { min-width: 132px; padding: 0 14px; border: 1px solid #456780; border-radius: 7px; background: #456780; color: #fff; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .send-button:hover:not(:disabled) { background: #395c76; }
+    .send-button:disabled { opacity: .4; cursor: not-allowed; }
+    .chat-hint { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; color: #74818d; font-size: 10px; }
+    @media (max-width: 760px) {
+      .shell { width: min(100% - 24px, 560px); padding-top: 18px; }
+      .topbar { margin-bottom: 25px; }
+      .intro { align-items: flex-start; flex-direction: column; }
+      .intro h1 { font-size: 28px; }
+      .device-select { width: 100%; }
+      .grid, .details, .metrics { grid-template-columns: 1fr; }
+      .chat-card { grid-column: auto; }
+      .led-card { min-height: 250px; }
+      .metric { padding: 12px; }
+      .metric-value { font-size: 32px; }
+      .footer { flex-direction: column; }
+      .chat-form { flex-direction: column; }
+      .send-button { min-height: 44px; }
+      .bubble-row { max-width: 94%; }
+    }</style>
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42m-9.88 9.88-1.42 1.42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.6"/></svg></div>
+        <div><div class="brand-name">AIOT CONTROL DESK</div><div class="brand-sub">Bảng điều khiển hệ thống phòng</div></div>
+      </div>
+      <div id="connection" class="connection"><span class="dot"></span><span id="connectionText">Đang kết nối backend</span></div>
+    </header>
+
+    <section class="intro">
+      <div><div class="eyebrow">Bảng điều khiển thiết bị</div><h1>Phòng của đại ca.</h1><p>Theo dõi cảm biến và điều khiển đèn ESP32 ngay trên máy tính.</p></div>
+      <select id="deviceSelect" class="device-select" aria-label="Chọn thiết bị" hidden></select>
+    </section>
+
+    <div id="empty" class="empty" hidden>Chưa thấy ESP32 kết nối.<br>Kiểm tra Wi‑Fi, trạng thái WebSocket và backend rồi thử tải lại.</div>
+    <section id="dashboard" class="grid" hidden>
+      <article class="card">
+        <div class="card-head"><div class="card-title">Môi trường trong phòng</div><div class="card-note" id="sensorUpdated">Đang chờ dữ liệu cảm biến</div></div>
+        <div class="metrics">
+          <div class="metric"><div class="metric-top"><span>NHIỆT ĐỘ</span><span class="metric-icon" aria-hidden="true">°</span></div><div class="metric-value"><span id="temperature">--.-</span><small> °C</small></div><div class="metric-foot" id="temperatureFoot">Chưa có số đo</div><div class="chart-area"><div class="chart-heading">Xu hướng · 30 lần đo gần nhất</div><div id="temperatureChart" class="chart" aria-label="Biểu đồ nhiệt độ"></div></div></div>
+          <div class="metric"><div class="metric-top"><span>ĐỘ ẨM</span><span class="metric-icon" aria-hidden="true">%</span></div><div class="metric-value"><span id="humidity">--.-</span><small> %</small></div><div class="metric-foot" id="humidityFoot">Chưa có số đo</div><div class="chart-area"><div class="chart-heading">Xu hướng · 30 lần đo gần nhất</div><div id="humidityChart" class="chart" aria-label="Biểu đồ độ ẩm"></div></div></div>
+        </div>
+      </article>
+
+      <article class="card led-card">
+        <div class="card-head"><div class="card-title">LED WS2812B</div><div class="card-note" id="deviceState">ESP32</div></div>
+        <div class="led-state"><div id="bulb" class="bulb"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M9 18h6m-5 3h4m-2-19a7 7 0 0 0-4 12.75c.54.38 1 1.11 1 1.75h6c0-.64.46-1.37 1-1.75A7 7 0 0 0 12 2Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div><div class="led-label" id="ledLabel">Đang xác nhận trạng thái</div><div class="led-caption" id="ledCaption">Đang chờ trạng thái phần mềm do ESP32 báo</div></div></div>
+        <div class="led-actions"><button class="action" id="turnOn" data-enabled="true"><span>☼</span>Bật đèn</button><button class="action" id="turnOff" data-enabled="false"><span>◐</span>Tắt đèn</button></div>
+        <div id="busyLabel" class="busy-label"></div>
+      </article>
+    </section>
+
+    <section id="chatCard" class="card chat-card" hidden>
+      <div class="card-head"><div><div class="card-title">Nói chuyện với AI bằng văn bản</div><div class="card-note" style="margin-top:5px">Nhập câu như khi nói với ESP32; câu trả lời sẽ hiện ở đây, trên OLED và được phát qua loa.</div></div><div class="card-note">Gemini · ESP32</div></div>
+      <div id="conversation" class="conversation" aria-live="polite"><div class="chat-empty">Thử: “Bật đèn”, “Nhiệt độ và độ ẩm trong phòng là bao nhiêu?” hoặc hỏi chuyện tự nhiên.</div></div>
+      <form id="chatForm" class="chat-form"><textarea id="chatInput" class="chat-input" maxlength="400" rows="2" aria-label="Nhập câu yêu cầu" placeholder="Nhập câu muốn gửi cho trợ lý… (Ctrl + Enter để gửi)" required></textarea><button id="sendButton" class="send-button" type="submit">Gửi &amp; phát loa</button></form>
+      <div class="chat-hint"><span>Yêu cầu được xử lý như một lượt trợ lý; lệnh LED chỉ thực hiện sau ACK từ ESP32.</span><span id="charCount">0 / 400</span></div>
+    </section>
+
+    <section class="details">
+      <article class="card"><div class="card-head"><div class="card-title">Thiết bị</div><div class="card-note">Trạng thái trực tiếp</div></div><div id="deviceDetails"></div></article>
+      <article class="card"><div class="card-head"><div class="card-title">Hoạt động gần đây</div><div class="card-note">Phiên hiện tại</div></div><div class="activity" id="activity"><div class="card-note" style="padding:16px 0">Chưa có hoạt động.</div></div></article>
+    </section>
+    <footer class="footer"><span>AIoT local dashboard · điều khiển chỉ nhận từ trình duyệt trên máy chạy backend</span><span id="lastRefresh">Đang tải dữ liệu…</span></footer>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const state = { devices: [], selected: '', busy: false, chatSending: false, events: [], polling: false, chat: [], sensorHistory: Object.create(null) };
+    const $ = id => document.getElementById(id);
+    const esc = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    function note(message, error = false) {
+      const toast = $('toast'); toast.textContent = message; toast.classList.toggle('error', error); toast.classList.add('show');
+      clearTimeout(note.timer); note.timer = setTimeout(() => toast.classList.remove('show'), 3200);
+    }
+    function addEvent(message, kind = 'normal') {
+      state.events.unshift({ message, kind, time: new Date() }); state.events = state.events.slice(0, 8);
+      $('activity').innerHTML = state.events.map(event => `<div class="activity-item"><span class="activity-mark" style="background:${event.kind === 'error' ? '#bd4b45' : event.kind === 'success' ? '#2f855a' : '#52748f'}"></span><div><div class="activity-copy">${esc(event.message)}</div><div class="activity-time">${event.time.toLocaleTimeString('vi-VN')}</div></div></div>`).join('');
+    }
+    function renderChat() {
+      const conversation = $('conversation');
+      if (!state.chat.length) {
+        conversation.innerHTML = '<div class="chat-empty">Thử: “Bật đèn”, “Nhiệt độ và độ ẩm trong phòng là bao nhiêu?” hoặc hỏi chuyện tự nhiên.</div>';
+        return;
+      }
+      conversation.innerHTML = state.chat.map(item => `<div class="bubble-row ${item.role}"><div class="bubble-name">${item.role === 'user' ? 'Đại ca' : 'AIoT'}</div><div class="bubble${item.pending ? ' pending' : ''}">${esc(item.text)}</div></div>`).join('');
+      conversation.scrollTop = conversation.scrollHeight;
+    }
+    function rememberSensor(device) {
+      const sensor = device.sensor;
+      if (!sensor || sensor.stale) return;
+      const points = state.sensorHistory[device.id] || (state.sensorHistory[device.id] = []);
+      if (points.at(-1)?.receivedAt !== sensor.receivedAt) {
+        points.push({ receivedAt: sensor.receivedAt, temperature: Number(sensor.temperature), humidity: Number(sensor.humidity) });
+        if (points.length > 30) points.splice(0, points.length - 30);
+      }
+    }
+    function renderChart(elementId, points, field, unit) {
+      const element = $(elementId);
+      if (!points.length) {
+        element.innerHTML = '<div class="chart-empty">Đang chờ dữ liệu cảm biến</div>';
+        return;
+      }
+      const humidity = field === 'humidity';
+      const values = points.map(point => point[field]);
+      let low = 0, high = 100;
+      if (!humidity) {
+        const minimum = Math.min(...values), maximum = Math.max(...values);
+        const padding = Math.max(1, (maximum - minimum) * .12);
+        low = Math.floor((minimum - padding) / 5) * 5;
+        high = Math.ceil((maximum + padding) / 5) * 5;
+        if (high - low < 5) high = low + 5;
+      }
+      const left = 36, right = 294, top = 8, bottom = 68;
+      const x = index => points.length === 1 ? right : left + index * (right - left) / (points.length - 1);
+      const y = value => top + (high - value) * (bottom - top) / (high - low);
+      const color = humidity ? '#54877b' : '#4f7394';
+      const grid = [0, .5, 1].map(position => {
+        const value = high - (high - low) * position;
+        const label = humidity ? Math.round(value) : Number(value.toFixed(1));
+        const py = top + (bottom - top) * position;
+        return `<line class="chart-grid" x1="${left}" y1="${py}" x2="${right}" y2="${py}"/><text class="chart-axis" x="0" y="${py + 3}">${label}</text>`;
+      }).join('');
+      const path = points.map((point, index) => `${index ? 'L' : 'M'}${x(index).toFixed(1)},${y(point[field]).toFixed(1)}`).join(' ');
+      const dots = points.map((point, index) => `<circle class="chart-point" cx="${x(index).toFixed(1)}" cy="${y(point[field]).toFixed(1)}" r="${index === points.length - 1 ? 3 : 1.6}" fill="${color}"/>`).join('');
+      const time = value => new Date(value).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+      const lastTime = time(points.at(-1).receivedAt);
+      element.innerHTML = `<svg viewBox="0 0 300 92" preserveAspectRatio="none" aria-hidden="true"><g>${grid}</g><path class="chart-line" d="${path}" stroke="${color}"/>${dots}<text class="chart-axis" x="${left}" y="88">${time(points[0].receivedAt)}</text><text class="chart-axis" x="${right}" y="88" text-anchor="end">${lastTime} · ${values.at(-1).toFixed(1)} ${unit}</text></svg>`;
+    }
+    async function request(path, options = {}) {
+      const response = await fetch(path, { cache: 'no-store', ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || `Lỗi HTTP ${response.status}`);
+      return result;
+    }
+    function render(devices) {
+      const oldSelected = state.selected; state.devices = devices;
+      if (!devices.some(device => device.id === state.selected)) state.selected = devices[0]?.id || '';
+      const selector = $('deviceSelect'); selector.hidden = devices.length < 2;
+      if (devices.length > 1) {
+        selector.innerHTML = devices.map(device => `<option value="${esc(device.id)}">${esc(device.id)}</option>`).join('');
+        selector.value = state.selected;
+      }
+      const selected = devices.find(device => device.id === state.selected);
+      const connection = $('connection');
+      connection.classList.toggle('online', Boolean(selected?.connected)); connection.classList.toggle('offline', !selected?.connected);
+      $('connectionText').textContent = selected?.connected ? 'ESP32 đang kết nối' : devices.length ? 'ESP32 ngoại tuyến' : 'Chưa có ESP32';
+      $('empty').hidden = devices.length > 0; $('dashboard').hidden = !selected; document.querySelector('.details').hidden = !selected;
+      $('chatCard').hidden = !selected;
+      if (!selected) return;
+      rememberSensor(selected);
+      const led = selected.ledEnabled;
+      $('ledLabel').textContent = led === undefined ? 'Chưa nhận trạng thái' : led ? 'LED đang bật' : 'LED đang tắt';
+      $('ledCaption').textContent = led === undefined ? 'Firmware chưa báo trạng thái; lệnh mới sẽ đồng bộ lại' : 'Trạng thái logic do ESP32 báo / xác nhận';
+      $('bulb').classList.toggle('on', led === true);
+      $('turnOn').classList.toggle('active', led === true); $('turnOff').classList.toggle('active', led === false);
+      $('deviceState').textContent = selected.busy ? 'Đang xử lý' : selected.connected ? 'Sẵn sàng' : 'Ngoại tuyến';
+      $('busyLabel').textContent = selected.busy ? 'ESP32 đang bận; chờ thiết bị sẵn sàng.' : '';
+      $('turnOn').disabled = state.busy || !selected.connected || selected.busy || led === true;
+      $('turnOff').disabled = state.busy || !selected.connected || selected.busy || led === false;
+      $('chatInput').disabled = !selected.connected || selected.busy || state.chatSending;
+      $('sendButton').disabled = !selected.connected || selected.busy || state.chatSending;
+      const sensor = selected.sensor;
+      $('temperature').textContent = sensor && !sensor.stale ? Number(sensor.temperature).toFixed(1).replace('.', ',') : '--.-';
+      $('humidity').textContent = sensor && !sensor.stale ? Number(sensor.humidity).toFixed(1).replace('.', ',') : '--.-';
+      $('temperatureFoot').textContent = sensor ? sensor.stale ? 'Số đo đã cũ' : 'Đang cập nhật từ ESP32' : 'Chưa có số đo';
+      $('humidityFoot').textContent = $('temperatureFoot').textContent;
+      $('sensorUpdated').textContent = sensor ? `Cập nhật ${new Date(sensor.receivedAt).toLocaleTimeString('vi-VN')}${sensor.stale ? ' · đã cũ' : ''}` : 'Đang chờ dữ liệu cảm biến';
+      const history = state.sensorHistory[selected.id] || [];
+      renderChart('temperatureChart', history, 'temperature', '°C');
+      renderChart('humidityChart', history, 'humidity', '%');
+      $('deviceDetails').innerHTML = `<div class="detail-row"><span>Mã thiết bị</span><span>${esc(selected.id)}</span></div><div class="detail-row"><span>WebSocket</span><span>${selected.connected ? 'Đã kết nối' : 'Mất kết nối'}</span></div><div class="detail-row"><span>Trạng thái xử lý</span><span>${selected.busy ? 'Đang bận' : 'Đang nghe'}</span></div><div class="detail-row"><span>Kết nối từ</span><span>${new Date(selected.connectedAt).toLocaleString('vi-VN')}</span></div>`;
+      if (oldSelected !== state.selected) addEvent(`Đang theo dõi thiết bị ${selected.id}`);
+    }
+    async function refresh() {
+      if (state.polling) return; state.polling = true;
+      try {
+        const result = await request('/api/dashboard/devices');
+        render(result.devices || []); $('lastRefresh').textContent = `Cập nhật lúc ${new Date().toLocaleTimeString('vi-VN')}`;
+      } catch (error) {
+        $('connection').classList.remove('online'); $('connection').classList.add('offline'); $('connectionText').textContent = 'Backend chưa kết nối';
+        $('lastRefresh').textContent = 'Không lấy được dữ liệu';
+        if (!state.errorShown) { addEvent(`Không kết nối được dashboard: ${error.message}`, 'error'); state.errorShown = true; }
+      } finally { state.polling = false; }
+    }
+    async function setLed(enabled) {
+      const selected = state.devices.find(device => device.id === state.selected);
+      if (!selected || state.busy) return;
+      state.busy = true; render(state.devices);
+      try {
+        await request(`/api/dashboard/devices/${encodeURIComponent(selected.id)}/led`, { method: 'POST', body: JSON.stringify({ enabled }) });
+        addEvent(`Đã nhận ACK: ${enabled ? 'bật' : 'tắt'} đèn trên ${selected.id}`, 'success');
+        note(enabled ? 'Đèn đã bật.' : 'Đèn đã tắt.'); await refresh();
+      } catch (error) { addEvent(error.message, 'error'); note(error.message, true); await refresh(); }
+      finally { state.busy = false; render(state.devices); }
+    }
+    $('turnOn').addEventListener('click', () => setLed(true)); $('turnOff').addEventListener('click', () => setLed(false));
+    $('deviceSelect').addEventListener('change', event => { state.selected = event.target.value; render(state.devices); });
+    $('chatInput').addEventListener('input', event => { $('charCount').textContent = `${[...event.target.value].length} / 400`; });
+    $('chatInput').addEventListener('keydown', event => {
+      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('chatForm').requestSubmit(); }
+    });
+    $('chatForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const selected = state.devices.find(device => device.id === state.selected);
+      const text = $('chatInput').value.trim();
+      if (!selected || !text || state.chatSending || selected.busy) return;
+      state.chat.push({ role: 'user', text });
+      const pending = { role: 'assistant', text: 'Đang phân tích và gửi phản hồi tới ESP32…', pending: true };
+      state.chat.push(pending); renderChat(); $('chatInput').value = ''; $('charCount').textContent = '0 / 400';
+      state.chatSending = true; render(state.devices);
+      try {
+        const result = await request(`/api/dashboard/devices/${encodeURIComponent(selected.id)}/text`, {
+          method: 'POST', body: JSON.stringify({ text }),
+        });
+        state.chat = state.chat.filter(item => item !== pending);
+        state.chat.push({ role: 'assistant', text: result.reply }); renderChat();
+        addEvent(`AI đã trả lời: ${result.intent}`, 'success');
+      } catch (error) {
+        state.chat = state.chat.filter(item => item !== pending);
+        state.chat.push({ role: 'assistant', text: `Chưa xử lý được: ${error.message}` }); renderChat();
+        addEvent(error.message, 'error'); note(error.message, true);
+      } finally { state.chatSending = false; await refresh(); render(state.devices); }
+    });
+    refresh(); setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

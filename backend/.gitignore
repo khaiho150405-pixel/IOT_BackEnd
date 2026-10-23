@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build and cache
+dist/
+.cache/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Audio & media
+*.mp3
+*.wav
+*.pcm
+music/*.wav
+music/mp4/*.mp4
+!music/mp4/.gitkeep
+fonts/
+
+# Scratch & temporary
+scratch/
+__pycache__/
+*.py[cod]

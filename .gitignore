@@ -1,0 +1,42 @@
+# PlatformIO
+.pio/
+.vscode/
+
+# Sensitive configuration
+include/config.h
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Node dependencies and build
+node_modules/
+backend/node_modules/
+dist/
+backend/dist/
+.cache/
+backend/.cache/
+
+# Audio and media temporary files
+*.mp3
+*.wav
+*.pcm
+backend/music/*.wav
+backend/music/mp4/*.mp4
+!backend/music/mp4/.gitkeep
+backend/fonts/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Scratch & temporary
+backend/scratch/
+scratch/
+.DS_Store
+Thumbs.db

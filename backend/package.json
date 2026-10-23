@@ -1,0 +1,35 @@
+{
+  "name": "aiot-gemini-backend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/main.js",
+    "dev": "tsx src/main.ts",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "^0.1.80",
+    "@nestjs/common": "^11.1.0",
+    "@nestjs/core": "^11.1.0",
+    "@nestjs/platform-express": "^11.1.0",
+    "aedes": "^1.2.0",
+    "dotenv": "^17.0.0",
+    "mqtt": "^5.16.1",
+    "pg": "^8.16.0",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "typeorm": "^0.3.25",
+    "ws": "^8.18.3",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}

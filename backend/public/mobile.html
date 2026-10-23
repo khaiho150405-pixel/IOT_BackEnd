@@ -1,0 +1,997 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>AIoT Mobile Control & MQTT Hub</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: rgba(22, 29, 47, 0.7);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --accent: #38bdf8;
+      --accent-glow: rgba(56, 189, 248, 0.35);
+      --success: #10b981;
+      --success-glow: rgba(16, 185, 129, 0.35);
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text: #f1f5f9;
+      --text-muted: #94a3b8;
+      --radius: 18px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+
+    body {
+      background-color: var(--bg);
+      background-image: radial-gradient(circle at 10% 20%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
+                        radial-gradient(circle at 90% 80%, rgba(16, 185, 129, 0.08) 0%, transparent 40%);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 16px 14px 40px;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 4px;
+    }
+
+    .logo-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-badge {
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      background: linear-gradient(135deg, #0284c7, #10b981);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 4px 14px var(--accent-glow);
+    }
+
+    .logo-badge svg { width: 22px; height: 22px; fill: white; }
+
+    h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
+    .subtitle { font-size: 0.75rem; color: var(--text-muted); }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--success);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+    }
+    .status-badge.offline {
+      background: rgba(239, 68, 68, 0.1);
+      color: var(--danger);
+      border-color: rgba(239, 68, 68, 0.25);
+    }
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 8px currentColor;
+    }
+
+    .glass-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 18px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+
+    /* Role badge & unlock button */
+    .role-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 14px;
+      border-radius: 14px;
+      background: rgba(15, 23, 42, 0.7);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 0.8rem;
+    }
+    .role-badge {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 600;
+    }
+    .role-badge.guest { color: #94a3b8; }
+    .role-badge.admin { color: #38bdf8; }
+    .btn-role-action {
+      background: rgba(56, 189, 248, 0.15);
+      border: 1px solid rgba(56, 189, 248, 0.3);
+      color: #7dd3fc;
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-role-action:active { transform: scale(0.95); }
+    .btn-role-action.logout {
+      background: rgba(239, 68, 68, 0.15);
+      border-color: rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+    }
+
+    /* Locked state indicators */
+    .locked-notice {
+      display: none;
+      font-size: 0.75rem;
+      color: #94a3b8;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 6px 10px;
+      border-radius: 8px;
+      margin-top: 8px;
+      align-items: center;
+      gap: 6px;
+    }
+    body.is-guest .locked-notice { display: flex; }
+    body.is-guest .admin-only { opacity: 0.45; pointer-events: none !important; }
+
+    /* Modal PIN */
+    .modal-backdrop {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+      padding: 20px;
+    }
+    .modal-backdrop.show { display: flex; }
+    .modal-card {
+      background: #111827;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 24px;
+      padding: 24px;
+      width: 100%;
+      max-width: 360px;
+      text-align: center;
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.8);
+      animation: popIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes popIn {
+      from { transform: scale(0.9); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .modal-title { font-size: 1.15rem; font-weight: 700; margin-bottom: 6px; color: #f8fafc; }
+    .modal-sub { font-size: 0.8rem; color: #94a3b8; margin-bottom: 18px; line-height: 1.4; }
+    .pin-input {
+      width: 100%;
+      padding: 13px;
+      font-size: 1.25rem;
+      letter-spacing: 4px;
+      text-align: center;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      color: #38bdf8;
+      font-weight: 700;
+      margin-bottom: 14px;
+      outline: none;
+    }
+    .pin-input:focus { border-color: #38bdf8; box-shadow: 0 0 0 2px var(--accent-glow); }
+    .modal-btns { display: flex; gap: 10px; }
+    .btn-modal {
+      flex: 1;
+      padding: 11px;
+      border-radius: 12px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-modal.primary {
+      background: linear-gradient(135deg, #0284c7, #2563eb);
+      color: white;
+    }
+    .btn-modal.cancel {
+      background: #334155;
+      color: #cbd5e1;
+    }
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      padding: 18px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+
+    .sensor-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    .sensor-card {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 16px;
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .sensor-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    .sensor-val {
+      font-size: 1.85rem;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+    .sensor-val.temp { color: #f97316; }
+    .sensor-val.humid { color: #38bdf8; }
+
+    .control-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 4px;
+    }
+
+    .led-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .led-title { font-weight: 600; font-size: 1rem; }
+    .led-sub { font-size: 0.8rem; color: var(--text-muted); }
+
+    /* Switch toggle */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 58px;
+      height: 32px;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #334155;
+      transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 34px;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 24px;
+      width: 24px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .3s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 50%;
+    }
+    input:checked + .slider {
+      background-color: var(--success);
+      box-shadow: 0 0 16px var(--success-glow);
+    }
+    input:checked + .slider:before {
+      transform: translateX(26px);
+    }
+
+    /* Lamp Graphic Illustration */
+    .lamp-illustration-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-top: 14px;
+      padding: 12px 0 6px;
+      position: relative;
+      cursor: pointer;
+    }
+    .phone-lamp-glow {
+      position: absolute;
+      width: 140px;
+      height: 140px;
+      top: 6px;
+      border-radius: 50%;
+      filter: blur(24px);
+      opacity: 0;
+      transition: all 0.4s ease;
+      pointer-events: none;
+    }
+    .phone-lamp-svg {
+      width: 80px;
+      height: 80px;
+      z-index: 2;
+      transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .lamp-illustration-wrap:active .phone-lamp-svg {
+      transform: scale(0.92);
+    }
+    .phone-lamp-status {
+      margin-top: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      z-index: 2;
+      letter-spacing: 0.5px;
+      transition: color 0.3s;
+    }
+    .phone-lamp-hint {
+      font-size: 0.72rem;
+      color: var(--text-muted);
+      margin-top: 2px;
+      z-index: 2;
+    }
+
+    /* Command pill tags */
+    .pill-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .pill {
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.2);
+      color: #7dd3fc;
+      padding: 7px 12px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      white-space: nowrap;
+    }
+    .pill:active {
+      transform: scale(0.96);
+      background: rgba(56, 189, 248, 0.25);
+    }
+
+    /* Input chat box */
+    .chat-box {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .chat-history {
+      max-height: 200px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-right: 4px;
+    }
+    .chat-bubble {
+      padding: 10px 14px;
+      border-radius: 14px;
+      font-size: 0.88rem;
+      line-height: 1.4;
+      max-width: 88%;
+      word-break: break-word;
+    }
+    .chat-bubble.user {
+      align-self: flex-end;
+      background: #0284c7;
+      color: white;
+      border-bottom-right-radius: 4px;
+    }
+    .chat-bubble.assistant {
+      align-self: flex-start;
+      background: rgba(255, 255, 255, 0.08);
+      color: var(--text);
+      border-bottom-left-radius: 4px;
+    }
+
+    .input-form {
+      display: flex;
+      gap: 8px;
+      position: relative;
+    }
+    .text-input {
+      flex: 1;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 12px 14px;
+      color: white;
+      font-size: 0.92rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .text-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+    .send-btn {
+      background: linear-gradient(135deg, #0284c7, #0ea5e9);
+      color: white;
+      border: none;
+      border-radius: 14px;
+      padding: 0 16px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.15s;
+    }
+    .send-btn:active { transform: scale(0.95); }
+
+    /* Accordion MQTT info */
+    details {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--card-border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: all 0.3s ease;
+    }
+    summary {
+      padding: 14px 18px;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #38bdf8;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::after {
+      content: '+';
+      font-size: 1.2rem;
+      font-weight: 400;
+      transition: transform 0.2s;
+    }
+    details[open] summary::after { transform: rotate(45deg); }
+    .mqtt-guide {
+      padding: 0 18px 18px;
+      font-size: 0.82rem;
+      line-height: 1.5;
+      color: var(--text-muted);
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .mqtt-guide code {
+      background: rgba(15, 23, 42, 0.9);
+      color: #38bdf8;
+      padding: 2px 6px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 0.8rem;
+    }
+    .mqtt-guide table {
+      width: 100%;
+      margin-top: 10px;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+    .mqtt-guide th, .mqtt-guide td {
+      padding: 6px 8px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .mqtt-guide th { color: var(--text); }
+  </style>
+</head>
+<body class="is-guest">
+  <div class="container">
+    <header>
+      <div class="logo-group">
+        <div class="logo-badge">
+          <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>
+        </div>
+        <div>
+          <h1>AIoT Smart Room</h1>
+          <div class="subtitle" id="deviceMac">Đang tìm ESP32...</div>
+        </div>
+      </div>
+      <div class="status-badge" id="statusBadge">
+        <span class="status-dot"></span>
+        <span id="statusText">Kết nối...</span>
+      </div>
+    </header>
+
+    <!-- Role & Security Bar -->
+    <div class="role-bar">
+      <div class="role-badge guest" id="roleBadge">
+        <span id="roleIcon">👁️</span>
+        <span id="roleText">Khán giả (Chỉ xem)</span>
+      </div>
+      <button class="btn-role-action" id="btnRoleAction" onclick="handleRoleClick()">🔑 Mở khóa Admin</button>
+    </div>
+
+    <!-- Sensors (Public for everyone) -->
+    <div class="glass-card">
+      <div class="sensor-grid">
+        <div class="sensor-card">
+          <div class="sensor-header">
+            <span>Nhiệt độ phòng</span>
+            <span>🌡️</span>
+          </div>
+          <div class="sensor-val temp" id="tempVal">--.-°C</div>
+        </div>
+        <div class="sensor-card">
+          <div class="sensor-header">
+            <span>Độ ẩm không khí</span>
+            <span>💧</span>
+          </div>
+          <div class="sensor-val humid" id="humidVal">--%</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- LED Switch & Visual Lamp Illustration -->
+    <div class="glass-card">
+      <div class="control-row">
+        <div class="led-info">
+          <div class="led-title">Minh họa trạng thái đèn</div>
+          <div class="led-sub" id="ledSub">Trạng thái đèn trên mạch</div>
+        </div>
+        <label class="switch admin-only">
+          <input type="checkbox" id="ledToggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="lamp-illustration-wrap" onclick="handleLampIllustrationClick()">
+        <div id="phoneLampGlow" class="phone-lamp-glow"></div>
+        <svg id="phoneLampSvg" class="phone-lamp-svg" viewBox="0 0 24 24">
+          <path id="phoneLampBulb" d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" fill="#334155" stroke="#64748b" stroke-width="1.5"/>
+          <path d="M9 10l2 2 2-2" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round"/>
+          <line x1="9" y1="21" x2="15" y2="21" stroke="#64748b" stroke-width="1.5" stroke-linecap="round"/>
+        </svg>
+        <div id="phoneLampStatusText" class="phone-lamp-status">🌑 ĐÈN ĐANG TẮT</div>
+        <div class="phone-lamp-hint">Chạm vào bóng đèn để bật / tắt</div>
+      </div>
+
+      <div class="locked-notice" id="ledLockNotice">
+        <span>🔒</span>
+        <span>Chế độ chỉ xem: Cần quyền Admin để bật/tắt đèn</span>
+      </div>
+    </div>
+
+    <!-- Quick commands & Chat (Protected) -->
+    <div class="glass-card">
+      <div class="chat-box">
+        <div style="font-weight: 600; font-size: 0.95rem;">Điều khiển giọng nói & AI</div>
+        
+        <div class="pill-group admin-only">
+          <button class="pill" onclick="sendQuick('Bật đèn')">💡 Bật đèn</button>
+          <button class="pill" onclick="sendQuick('Tắt đèn')">🌑 Tắt đèn</button>
+          <button class="pill" onclick="sendQuick('Nhiệt độ và độ ẩm trong phòng bao nhiêu?')">🌡️ Hỏi nhiệt độ</button>
+          <button class="pill" onclick="sendQuick('Em chào đại ca!')">👋 Chào AI</button>
+          <button class="pill" onclick="sendQuick('Kể một câu chuyện cười')">😄 Chuyện cười</button>
+        </div>
+
+        <div class="chat-history" id="chatHistory">
+          <div class="chat-bubble assistant">Em chào đại ca! Em là trợ lý AIoT phòng thông minh. Đại ca và các đồng nghiệp có thể mở khóa Admin để điều khiển đèn và trò chuyện với em nhé!</div>
+        </div>
+
+        <form class="input-form admin-only" id="chatForm">
+          <input type="text" class="text-input" id="chatInput" placeholder="Nhập câu lệnh hoặc trò chuyện..." autocomplete="off">
+          <button type="submit" class="send-btn" id="sendBtn">Gửi</button>
+        </form>
+        <div class="locked-notice" id="chatLockNotice">
+          <span>🔒</span>
+          <span>Chế độ chỉ xem: Chỉ quản trị viên mới có thể ra lệnh điều khiển</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- MQTT Connection Info for Mobile App & Laptop -->
+    <details>
+      <summary>📡 Kết nối MQTT trên Điện thoại / Laptop</summary>
+      <div class="mqtt-guide">
+        <p style="margin-top: 10px;">Hệ thống đã tích hợp <strong>MQTT Broker</strong> sẵn sàng cho các app điện thoại (như <em>IoT MQTT Panel</em>, <em>MQTT Explorer</em>, <em>Home Assistant</em>):</p>
+        
+        <table style="margin-top: 10px;">
+          <tr>
+            <th>Thông số</th>
+            <th>Giá trị cấu hình</th>
+          </tr>
+          <tr>
+            <td>Broker Host (IP máy tính)</td>
+            <td><code id="mqttHost">Đang tải...</code></td>
+          </tr>
+          <tr>
+            <td>Port TCP</td>
+            <td><code>1883</code></td>
+          </tr>
+          <tr>
+            <td>Topic điều khiển</td>
+            <td><code>aiot/command</code> hoặc <code>aiot/led/set</code></td>
+          </tr>
+          <tr>
+            <td>Topic nhận cảm biến</td>
+            <td><code>aiot/sensor</code></td>
+          </tr>
+          <tr>
+            <td>Topic trạng thái</td>
+            <td><code>aiot/state</code></td>
+          </tr>
+          <tr>
+            <td>Topic hội thoại AI</td>
+            <td><code>aiot/chat</code></td>
+          </tr>
+        </table>
+
+        <div style="margin-top: 12px; font-size: 0.8rem; background: rgba(0,0,0,0.25); padding: 10px; border-radius: 10px;">
+          <strong>💡 Mẹo dùng trên điện thoại:</strong><br>
+          - Bật đèn: Publish <code>on</code> tới <code>aiot/led/set</code><br>
+          - Tắt đèn: Publish <code>off</code> tới <code>aiot/led/set</code><br>
+          - Hỏi nhiệt độ / trò chuyện: Publish <code>{"action":"text","text":"Nhiệt độ phòng?"}</code> tới <code>aiot/command</code>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <!-- Modal Nhập PIN Quản Trị -->
+  <div class="modal-backdrop" id="pinModal">
+    <div class="modal-card">
+      <div style="font-size: 2.2rem; margin-bottom: 8px;">🔑</div>
+      <div class="modal-title">Mở khóa Quản Trị Viên</div>
+      <div class="modal-sub">Dành cho đại ca và đồng nghiệp. Nhập mã PIN bảo mật để mở quyền bật/tắt đèn và ra lệnh cho phòng thông minh.</div>
+      <input type="password" id="inputPin" class="pin-input" placeholder="Nhập mã PIN bảo mật..." maxlength="12" autocomplete="off">
+      <div style="color: #ef4444; font-size: 0.8rem; margin-bottom: 12px; display: none;" id="pinError">Mã PIN không đúng, vui lòng thử lại!</div>
+      <div class="modal-btns">
+        <button type="button" class="btn-modal cancel" onclick="closePinModal()">Hủy</button>
+        <button type="button" class="btn-modal primary" onclick="submitPin()">Xác nhận</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let activeDeviceId = null;
+    let isBusy = false;
+    let isAdmin = false;
+
+    function getAdminPin() {
+      return localStorage.getItem('aiot_admin_pin') || '';
+    }
+
+    function applyRoleUI(adminStatus) {
+      isAdmin = !!adminStatus;
+      const roleBadge = document.getElementById('roleBadge');
+      const roleIcon = document.getElementById('roleIcon');
+      const roleText = document.getElementById('roleText');
+      const btnRoleAction = document.getElementById('btnRoleAction');
+
+      if (isAdmin) {
+        document.body.classList.remove('is-guest');
+        roleBadge.className = 'role-badge admin';
+        roleIcon.innerText = '👑';
+        roleText.innerText = 'Quản trị viên (Đại ca)';
+        btnRoleAction.className = 'btn-role-action logout';
+        btnRoleAction.innerText = 'Khóa lại 🔒';
+        document.getElementById('chatInput').placeholder = 'Nhập câu lệnh hoặc trò chuyện với AI...';
+      } else {
+        document.body.classList.add('is-guest');
+        roleBadge.className = 'role-badge guest';
+        roleIcon.innerText = '👁️';
+        roleText.innerText = 'Khán giả (Chỉ xem)';
+        btnRoleAction.className = 'btn-role-action';
+        btnRoleAction.innerText = '🔑 Mở khóa Admin';
+        document.getElementById('chatInput').placeholder = '🔒 Chế độ khán giả: Chỉ xem, không thể gửi lệnh';
+      }
+    }
+
+    function handleRoleClick() {
+      if (isAdmin) {
+        logoutAdmin();
+      } else {
+        openPinModal();
+      }
+    }
+
+    function openPinModal() {
+      const modal = document.getElementById('pinModal');
+      const input = document.getElementById('inputPin');
+      const err = document.getElementById('pinError');
+      err.style.display = 'none';
+      input.value = '';
+      modal.classList.add('show');
+      setTimeout(() => input.focus(), 100);
+    }
+
+    function closePinModal() {
+      document.getElementById('pinModal').classList.remove('show');
+    }
+
+    async function submitPin() {
+      const input = document.getElementById('inputPin');
+      const pin = input.value.trim();
+      const err = document.getElementById('pinError');
+      if (!pin) {
+        err.innerText = 'Vui lòng nhập mã PIN!';
+        err.style.display = 'block';
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/mobile/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin })
+        });
+        if (!res.ok) {
+          throw new Error('Mã PIN không chính xác!');
+        }
+        localStorage.setItem('aiot_admin_pin', pin);
+        closePinModal();
+        applyRoleUI(true);
+        appendChat('assistant', '🎉 Xác thực Quản trị viên thành công! Em chào đại ca, em đã mở khóa quyền điều khiển rồi ạ.');
+      } catch (e) {
+        err.innerText = e.message || 'Mã PIN không đúng!';
+        err.style.display = 'block';
+      }
+    }
+
+    function logoutAdmin() {
+      if (confirm('Đại ca có muốn khóa lại và quay về Chế độ chỉ xem không ạ?')) {
+        localStorage.removeItem('aiot_admin_pin');
+        applyRoleUI(false);
+      }
+    }
+
+    document.getElementById('inputPin').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') submitPin();
+      if (e.key === 'Escape') closePinModal();
+    });
+
+    async function loadMqttInfo() {
+      try {
+        const res = await fetch('/api/mobile/info');
+        const data = await res.json();
+        if (data.broker) {
+          document.getElementById('mqttHost').innerText = window.location.hostname || data.broker.host;
+        }
+      } catch (e) {
+        document.getElementById('mqttHost').innerText = window.location.hostname;
+      }
+    }
+
+    async function updateStatus() {
+      try {
+        const res = await fetch('/api/mobile/devices');
+        const data = await res.json();
+        const devices = data.devices || [];
+        const onlineDevice = devices.find(d => d.connected) || devices[0];
+
+        const badge = document.getElementById('statusBadge');
+        const statusText = document.getElementById('statusText');
+        const macElem = document.getElementById('deviceMac');
+        const tempElem = document.getElementById('tempVal');
+        const humidElem = document.getElementById('humidVal');
+        const ledToggle = document.getElementById('ledToggle');
+        const ledSub = document.getElementById('ledSub');
+
+        if (onlineDevice && onlineDevice.connected) {
+          activeDeviceId = onlineDevice.id;
+          badge.className = 'status-badge';
+          statusText.innerText = 'Trực tuyến';
+          macElem.innerText = 'ESP32: ' + onlineDevice.id;
+
+          if (onlineDevice.sensor) {
+            tempElem.innerText = onlineDevice.sensor.temperature.toFixed(1).replace('.', ',') + '°C';
+            humidElem.innerText = Math.round(onlineDevice.sensor.humidity) + '%';
+          } else {
+            tempElem.innerText = '--.-°C';
+            humidElem.innerText = '--%';
+          }
+
+          ledToggle.disabled = !isAdmin;
+          ledToggle.checked = !!onlineDevice.ledEnabled;
+          ledSub.innerText = onlineDevice.ledEnabled ? 'Đèn đang BẬT' : 'Đèn đang TẮT';
+
+          const bulb = document.getElementById('phoneLampBulb');
+          const glow = document.getElementById('phoneLampGlow');
+          const statusTxt = document.getElementById('phoneLampStatusText');
+          if (onlineDevice.ledEnabled) {
+            bulb.setAttribute('fill', '#4ade80');
+            bulb.setAttribute('stroke', '#4ade80');
+            glow.style.background = 'radial-gradient(circle, rgba(74,222,128,0.55) 0%, transparent 70%)';
+            glow.style.opacity = '1';
+            statusTxt.innerText = '💡 ĐÈN ĐANG BẬT';
+            statusTxt.style.color = '#4ade80';
+          } else {
+            bulb.setAttribute('fill', '#1e293b');
+            bulb.setAttribute('stroke', '#475569');
+            glow.style.opacity = '0';
+            statusTxt.innerText = '🌑 ĐÈN ĐANG TẮT';
+            statusTxt.style.color = '#94a3b8';
+          }
+        } else {
+          badge.className = 'status-badge offline';
+          statusText.innerText = 'Ngoại tuyến';
+          macElem.innerText = 'ESP32 mất kết nối';
+          tempElem.innerText = '--.-°C';
+          humidElem.innerText = '--%';
+          ledToggle.disabled = true;
+          ledSub.innerText = 'ESP32 chưa kết nối';
+          const bulb = document.getElementById('phoneLampBulb');
+          const glow = document.getElementById('phoneLampGlow');
+          const statusTxt = document.getElementById('phoneLampStatusText');
+          if (bulb) {
+            bulb.setAttribute('fill', '#1e293b');
+            bulb.setAttribute('stroke', '#475569');
+            glow.style.opacity = '0';
+            statusTxt.innerText = '⚪ CHƯA KẾT NỐI';
+            statusTxt.style.color = '#64748b';
+          }
+        }
+      } catch (e) {
+        console.warn('Status poll error', e);
+      }
+    }
+
+    function handleLampIllustrationClick() {
+      if (!isAdmin) {
+        openPinModal();
+      } else {
+        const toggle = document.getElementById('ledToggle');
+        toggle.click();
+      }
+    }
+
+    // Handle LED Toggle
+    document.getElementById('ledToggle').addEventListener('change', async function(e) {
+      if (!activeDeviceId) return;
+      if (!isAdmin) {
+        e.preventDefault();
+        e.target.checked = !e.target.checked;
+        openPinModal();
+        return;
+      }
+      const targetState = e.target.checked;
+      try {
+        const res = await fetch(`/api/mobile/devices/${activeDeviceId}/led`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Admin-Pin': getAdminPin()
+          },
+          body: JSON.stringify({ enabled: targetState })
+        });
+        if (res.status === 401 || res.status === 403) {
+          applyRoleUI(false);
+          openPinModal();
+          throw new Error('Cần mã PIN Quản trị viên để điều khiển đèn.');
+        }
+        if (!res.ok) throw new Error('Thao tác không thành công');
+        updateStatus();
+      } catch (err) {
+        alert(err.message);
+        e.target.checked = !targetState;
+      }
+    });
+
+    // Chat handling
+    function appendChat(role, text) {
+      const history = document.getElementById('chatHistory');
+      const bubble = document.createElement('div');
+      bubble.className = `chat-bubble ${role}`;
+      bubble.innerText = text;
+      history.appendChild(bubble);
+      history.scrollTop = history.scrollHeight;
+    }
+
+    async function sendQuick(text) {
+      if (!isAdmin) {
+        openPinModal();
+        return;
+      }
+      document.getElementById('chatInput').value = text;
+      submitCurrent();
+    }
+
+    async function submitCurrent() {
+      if (!isAdmin) {
+        openPinModal();
+        return;
+      }
+      const input = document.getElementById('chatInput');
+      const text = input.value.trim();
+      if (!text || !activeDeviceId || isBusy) return;
+
+      appendChat('user', text);
+      input.value = '';
+      isBusy = true;
+      document.getElementById('sendBtn').innerText = '...';
+
+      try {
+        const res = await fetch(`/api/mobile/devices/${activeDeviceId}/text`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Admin-Pin': getAdminPin()
+          },
+          body: JSON.stringify({ text })
+        });
+        if (res.status === 401 || res.status === 403) {
+          applyRoleUI(false);
+          openPinModal();
+          throw new Error('Chế độ chỉ xem. Vui lòng mở khóa Admin!');
+        }
+        const data = await res.json();
+        if (data.reply) {
+          appendChat('assistant', data.reply);
+        } else {
+          appendChat('assistant', 'Dạ đại ca, em đã thực hiện xong lệnh rồi ạ.');
+        }
+        updateStatus();
+      } catch (err) {
+        appendChat('assistant', 'Lỗi: ' + (err.message || 'Không thể gửi câu lệnh'));
+      } finally {
+        isBusy = false;
+        document.getElementById('sendBtn').innerText = 'Gửi';
+      }
+    }
+
+    document.getElementById('chatForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      submitCurrent();
+    });
+
+    // Check saved PIN on page load
+    (async function initAuth() {
+      const savedPin = getAdminPin();
+      if (savedPin) {
+        try {
+          const res = await fetch('/api/mobile/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: savedPin })
+          });
+          if (res.ok) {
+            applyRoleUI(true);
+          } else {
+            localStorage.removeItem('aiot_admin_pin');
+            applyRoleUI(false);
+          }
+        } catch {
+          applyRoleUI(true); // Network offline fallback
+        }
+      } else {
+        applyRoleUI(false);
+      }
+    })();
+
+    loadMqttInfo();
+    updateStatus();
+    setInterval(updateStatus, 2000);
+  </script>
+</body>
+</html>
