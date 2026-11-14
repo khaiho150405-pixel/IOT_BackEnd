@@ -5,7 +5,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { WebSocket, WebSocketServer, RawData } from 'ws';
 import { AiotService, Sensor, DecisionValue } from './aiot.service';
 import { HistoryStore } from './history';
-import { UtteranceDetector } from './audio';
+import { applySpeakerVolume, HighPassFilter, UtteranceDetector } from './audio';
 import { OledRenderer } from './display';
 import { MusicLibrary } from './music';
 import { AiotMqttService } from './mqtt.service';
@@ -15,8 +15,10 @@ interface Session {
   id?: string;
   connectedAt: number;
   sensor?: Sensor;
+  micSlot?: number;
   ledEnabled?: boolean;
   detector: UtteranceDetector;
+  highPass: HighPassFilter;
   busy: boolean;
   controller?: AbortController;
   lastTurn: number;
@@ -40,6 +42,7 @@ export class AiotGateway implements OnModuleDestroy {
   private server?: WebSocketServer;
   private sessions = new Set<Session>();
   private heartbeat?: NodeJS.Timeout;
+  private deviceUptime = new Map<string, number>();
   private oled = new OledRenderer();
   private music = new MusicLibrary();
   constructor(
@@ -69,7 +72,8 @@ export class AiotGateway implements OnModuleDestroy {
     this.server.on('connection', (ws, req) => {
       const peer = req.socket.remoteAddress || 'unknown peer';
       const session: Session = {
-        ws, connectedAt: Date.now(), detector: new UtteranceDetector(Number(process.env.VAD_RMS || 500),
+        ws, connectedAt: Date.now(), highPass: new HighPassFilter(Number(process.env.MIC_HIGHPASS_HZ || 120)),
+        detector: new UtteranceDetector(Number(process.env.VAD_RMS || 500),
           Number(process.env.VAD_SILENCE_MS || 850), Number(process.env.VAD_MAX_MS || 12000)),
         busy: false, lastTurn: 0, rateStart: Date.now(), rateBytes: 0, textCount: 0, alive: true,
         readyTimer: setTimeout(() => ws.close(1008, 'hello required'), 10000),
@@ -89,8 +93,10 @@ export class AiotGateway implements OnModuleDestroy {
         clearTimeout(session.readyTimer);
         session.controller?.abort();
         session.pending?.reject(new Error('Device disconnected'));
-        if (session.id) this.mqtt?.publishState(session.id, { connected: false });
         this.sessions.delete(session);
+        // A replaced (stale) connection must not report the device offline.
+        const replaced = [...this.sessions].some(other => other.id === session.id);
+        if (session.id && !replaced) this.mqtt?.publishState(session.id, { connected: false });
       });
       ws.on('error', () => ws.terminate());
     });
@@ -112,7 +118,7 @@ export class AiotGateway implements OnModuleDestroy {
     if (binary) {
       if (!s.id || !data.length || data.length % 2 || data.length > 4096) throw new Error('Invalid PCM');
       if (s.busy) return;
-      const utterance = s.detector.push(data);
+      const utterance = s.detector.push(s.highPass.process(data));
       if (utterance) {
         // Set busy synchronously, before any await. One request at a time/device.
         s.busy = true; s.lastTurn = Date.now();
@@ -134,7 +140,17 @@ export class AiotGateway implements OnModuleDestroy {
           !/^[A-Za-z0-9:_-]{1,64}$/.test(message.device_id) ||
           message.audio?.format !== 'pcm_s16le' || message.audio.sample_rate !== 16000 ||
           message.audio.channels !== 1) throw new Error('Invalid hello');
-      if ([...this.sessions].some(other => other !== s && other.id === message.device_id)) throw new Error('Device already connected');
+      // A device only reconnects when its previous connection is gone (reboot,
+      // Wi-Fi drop), but that TCP socket can linger here for up to two heartbeat
+      // periods. Rejecting the new one kept the device offline that long, so the
+      // newest connection always wins and the stale one is dropped.
+      for (const other of this.sessions) {
+        if (other !== s && other.id === message.device_id) {
+          console.log(`Replacing stale connection for ${message.device_id}`);
+          other.controller?.abort();
+          other.ws.terminate();
+        }
+      }
       s.id = message.device_id;
       // Do not guess after a backend/device reconnect. New firmware reports its
       // logical LED state in hello; older firmware remains unknown until an ACK.
@@ -147,6 +163,18 @@ export class AiotGateway implements OnModuleDestroy {
       return;
     }
     if (message.type === 'sensor') {
+      // Diagnostics only: a falling uptime means the ESP32 rebooted (power dip,
+      // reset), and mic_slot shows which I2S slot the firmware found the mic on.
+      if (Number.isFinite(message.uptime_ms) && s.id) {
+        const previous = this.deviceUptime.get(s.id);
+        if (previous !== undefined && message.uptime_ms < previous)
+          console.warn(`Device ${s.id} rebooted (uptime ${Math.round(previous / 1000)} s -> ${Math.round(message.uptime_ms / 1000)} s)`);
+        this.deviceUptime.set(s.id, message.uptime_ms);
+      }
+      if (Number.isInteger(message.mic_slot) && message.mic_slot !== s.micSlot) {
+        s.micSlot = message.mic_slot;
+        console.log(`Device ${s.id} microphone slot ${message.mic_slot} (scores ${JSON.stringify(message.mic_scores)})`);
+      }
       const { temperature: t, humidity: h } = message;
       s.sensor = message.valid === true && Number.isFinite(t) && Number.isFinite(h) &&
         t >= -40 && t <= 80 && h >= 0 && h <= 100 ? { temperature: t, humidity: h, receivedAt: Date.now() } : undefined;
@@ -241,6 +269,7 @@ export class AiotGateway implements OnModuleDestroy {
 
   private async stream(s: Session, pcm: Buffer, signal: AbortSignal, music = false, onFirstAudio?: () => void) {
     signal.throwIfAborted();
+    pcm = applySpeakerVolume(pcm);
     const id = randomUUID();
     const finished = new Promise<void>(resolve => { s.playback = { id, resolve }; });
     this.send(s, { type: 'audio_start', id, duration_ms: Math.ceil(pcm.length / 32), mode: music ? 'music' : 'speech' });

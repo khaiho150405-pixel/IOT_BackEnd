@@ -61,6 +61,51 @@ export function resample(pcm: Buffer, from: number, to = RATE): Buffer {
 }
 
 // Energy-based endpointing; the configured ASR/LLM handles recognition and language.
+/**
+ * Speaker volume (0.05-1, default SPEAKER_VOLUME=0.5). On the testboard the
+ * ESP32 rebooted right after loud replies (MAX98357A current peaks on a weak
+ * 5 V supply); halving the amplitude cuts the peak speaker power to a quarter.
+ * Returns a copy so cached speech buffers are never modified.
+ */
+export function applySpeakerVolume(pcm: Buffer, volume = Number(process.env.SPEAKER_VOLUME ?? 0.5)): Buffer {
+  const gain = Number.isFinite(volume) ? Math.min(1, Math.max(0.05, volume)) : 0.5;
+  if (gain === 1) return pcm;
+  const out = Buffer.allocUnsafe(pcm.length - (pcm.length % 2));
+  for (let i = 0; i < out.length; i += 2) out.writeInt16LE(Math.round(pcm.readInt16LE(i) * gain), i);
+  return out;
+}
+
+/**
+ * Second-order Butterworth high-pass for the 16 kHz microphone stream.
+ *
+ * Measured on the INMP441 testboard: 65% of the background noise was below
+ * 100 Hz (a steady hum around 82-88 Hz plus DC/rumble). Speech recognition does
+ * not need that band, and it pushed the VAD over its threshold on silence.
+ * State is kept across frames, so call it per device on consecutive chunks.
+ */
+export class HighPassFilter {
+  private readonly b0: number; private readonly b1: number; private readonly b2: number;
+  private readonly a1: number; private readonly a2: number;
+  private x1 = 0; private x2 = 0; private y1 = 0; private y2 = 0;
+  constructor(cutoffHz = 120, sampleRate = 16000) {
+    const w0 = 2 * Math.PI * cutoffHz / sampleRate;
+    const alpha = Math.sin(w0) / (2 * Math.SQRT1_2);
+    const cos = Math.cos(w0), a0 = 1 + alpha;
+    this.b0 = (1 + cos) / 2 / a0; this.b1 = -(1 + cos) / a0; this.b2 = this.b0;
+    this.a1 = -2 * cos / a0; this.a2 = (1 - alpha) / a0;
+  }
+  process(chunk: Buffer): Buffer {
+    const out = Buffer.allocUnsafe(chunk.length);
+    for (let i = 0; i < chunk.length; i += 2) {
+      const x = chunk.readInt16LE(i);
+      const y = this.b0 * x + this.b1 * this.x1 + this.b2 * this.x2 - this.a1 * this.y1 - this.a2 * this.y2;
+      this.x2 = this.x1; this.x1 = x; this.y2 = this.y1; this.y1 = y;
+      out.writeInt16LE(Math.max(-32768, Math.min(32767, Math.round(y))), i);
+    }
+    return out;
+  }
+}
+
 export class UtteranceDetector {
   private pre: Buffer[] = [];
   private preBytes = 0;

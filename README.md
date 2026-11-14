@@ -1,73 +1,203 @@
-# Trợ lý giọng nói AI + ESP32-S3 N16R8
+# Trợ lý giọng nói AI + ESP32-S3 N16R8 (AIoT Smart Room)
 
-Firmware và backend NestJS cho bật/tắt LED bằng lời nói, hỏi nhiệt độ/độ ẩm, trò chuyện và phát nhạc từ thư viện cục bộ. Có thể chọn Qwen 2.5 3B chạy local qua Ollama + Vosk tiếng Việt, hoặc Gemini nhận âm thanh trực tiếp; giọng đọc dùng Edge TTS ở chế độ local và Gemini TTS ở chế độ Gemini.
+ESP32-S3 thu âm, hiển thị OLED, bật/tắt LED và đo nhiệt độ/độ ẩm. Toàn bộ phần AI chạy trên **máy AI worker** (laptop/PC Windows chạy backend):
 
-Máy chạy backend phải bật. ESP32 không chạy mô hình và không gọi AI trực tiếp. Chế độ local xử lý LLM và nhận dạng tiếng Việt trên laptop; Edge TTS vẫn cần Internet. Vosk model hiện tại chỉ nhận dạng tiếng Việt; chế độ Gemini hỗ trợ nhận âm thanh đa ngôn ngữ. Đây là hội thoại theo lượt: nói một câu, dừng khoảng 0,5 giây, đợi hệ thống xử lý và trả lời rồi nói tiếp. Chưa có wake word hoặc khử tiếng vọng để nói đè lên loa.
+```
+ESP32-S3 ──WebSocket (PCM 16 kHz)──▶ Backend NestJS (cổng 3000)
+                                      ├─ Voice bridge Python (127.0.0.1:8010)
+                                      │    ├─ Nhận dạng tiếng Việt: PhoWhisper-base (VinAI), CPU int8
+                                      │    ├─ Nhận biết + nhận dạng tiếng Anh: Whisper base
+                                      │    └─ Giọng đọc: Edge TTS (Internet) → giọng Windows "Microsoft An" (offline) khi Edge lỗi
+                                      ├─ Ollama + Qwen 2.5 3B (127.0.0.1:11434): hiểu câu nói, phân loại ý định, trò chuyện
+                                      ├─ Dashboard /dashboard, Web Mobile /mobile
+                                      └─ MQTT broker nhúng (cổng 1883)
+```
 
-Tối ưu demo: chế độ local giữ Qwen đã nạp trong bộ nhớ, TTS chạy song song với chờ ACK và lịch sử không chặn phản hồi. Backend dành tối đa 8 giây cho phân tích và 9,5 giây để đưa câu trả lời chữ/OLED đầu tiên ra thiết bị. Khi câu trả lời đã hiện, TTS có thêm tối đa 2,2 giây, sau đó thử giọng ngắn đã chuẩn bị sẵn trong 0,7 giây. Nếu phân tích quá hạn, gửi `response_timeout`, hiện chỉ dẫn trên OLED và trả micro về nghe. Chế độ Gemini vẫn phụ thuộc API/mạng. Log `Voice latency: text=...ms` và `audio=...ms` đo từ lúc phát hiện hết câu, chưa gồm thời gian VAD im lặng và độ trễ phát loa.
+Mỗi lượt hội thoại: nói một câu, dừng ~1 giây; hệ thống nhận dạng (~1 s), Qwen phân tích (~0,7–2,5 s), rồi ESP32 nói câu trả lời (tổng ~2,5–4 s). Qwen phân loại câu thành trò chuyện, bật/tắt đèn, hỏi nhiệt độ/độ ẩm, phát/dừng nhạc; code kiểm tra lại quyết định (số đo luôn lấy từ cảm biến, lệnh đèn phải có động từ bật/tắt, chỉ phát bài có thật). Phép tính nói ("một cộng một bằng mấy") được giải chính xác bằng code. Hội thoại theo lượt (half-duplex): chưa có wake word và khử tiếng vọng.
 
-OLED 128×64: hai dòng đầu luôn hiển thị `Nhiet do`, `Do am`, trạng thái và số trang. Vùng dưới có một dòng `Bạn:` và hai dòng `AI:`, hỗ trợ dấu tiếng Việt bằng bitmap. Nội dung dài tự chuyển trang mỗi 3,5 giây. Cần nạp firmware mới để áp dụng phần đầu màn hình.
+> Hướng dẫn rút gọn để bật/tắt hằng ngày: [KHOI-DONG-THU-CONG.md](KHOI-DONG-THU-CONG.md).
 
-Luồng nhiều lượt: ESP32 gửi `playback_done` khi loa/buffer đã phát hết; backend mới gửi `listening`. Firmware xóa toàn bộ trạng thái phát khi nhận `listening`; nếu audio bị kẹt thì watchdog khôi phục, không giữ micro bị khóa. Backend đợi xác nhận kết thúc tối đa 4 giây sau audio_end rồi hủy an toàn. Khi chuẩn bị giọng nói thành công, OLED hiện câu trả lời và audio được gửi ngay tiếp theo; không còn cố ý hiện câu trả lời rồi chờ TTS nhiều giây. Khi TTS lỗi/quá hạn, OLED vẫn hiện nội dung thực và báo lỗi, không giả vờ đã nói.
+## Cấu trúc thư mục
 
-`DEMO_FAST_CONFIRMATIONS=true` bật câu xác nhận tiếng Việt ngắn và dùng số đo mới từ sensor. Câu LED được tạo giọng sẵn lúc backend khởi động và chỉ phát xác nhận sau ACK. Các phản hồi khác cache theo văn bản/provider/voice, giới hạn 24 mục/8 MB. Ở chế độ local, Edge TTS cần Internet; đặt `AI_PROVIDER=gemini` để dùng Gemini phân tích âm thanh đa ngôn ngữ và Gemini TTS.
+| Đường dẫn | Nội dung |
+| --- | --- |
+| `src/main.cpp`, `platformio.ini` | Firmware ESP32-S3 (Arduino-ESP32 2.0.17, flash 16 MB, PSRAM 8 MB) |
+| `include/config.example.h` | Mẫu cấu hình firmware → sao chép thành `include/config.h` (không commit) |
+| `backend/` | Backend NestJS, voice bridge, dashboard, kiểm thử |
+| `backend/.env.example` | Mẫu cấu hình backend → sao chép thành `backend/.env` (không commit) |
+| `backend/scripts/local-voice-bridge.py` | Nhận dạng giọng nói + tổng hợp giọng (backend tự khởi chạy) |
+| `backend/requirements-local-voice.txt` | Gói Python cho voice bridge |
+| `backend/requirements-model-convert.txt` | Gói Python chỉ dùng một lần để tạo model PhoWhisper |
+| `scripts/setup-phowhisper.py` | Tải và chuyển đổi PhoWhisper-base → `models/phowhisper-base-ct2` |
+| `scripts/start-local-xiaozhi.ps1` | Kiểm tra cấu hình, bật Ollama và chạy backend bằng một lệnh |
+| `scripts/fix-hotspot-firewall.ps1` | Mở cổng 3000 cho ESP32 khi dùng Mobile Hotspot của Windows |
+| `models/` | Model đã chuyển đổi (tạo ra trên máy, không commit) |
 
-## Cấu trúc
+## 1. Cài đặt máy AI worker (Windows 10/11, làm một lần)
 
-- `platformio.ini`: PlatformIO, Arduino-ESP32 2.0.17, flash 16 MB và Octal PSRAM 8 MB.
-- `include/config.h`: Wi-Fi, địa chỉ WebSocket, địa chỉ OLED, số LED, độ sáng và gain mic.
-- `src/main.cpp`: khởi tạo I2S, xử lý mạng/âm thanh core 0; DHT22/OLED/LED core 1.
-- `scripts/windows_paths.py`: rút gọn đường dẫn thư viện khi build trên Windows để tránh vượt giới hạn độ dài lệnh GCC; tự bỏ qua trên Linux/macOS.
-- `backend/`: NestJS, Ollama/Vosk hoặc Gemini, Edge/Gemini TTS, xác thực WebSocket, chia trang OLED, thư viện nhạc, lịch sử PostgreSQL tùy chọn và kiểm thử.
-- `backend/.env.example`: cấu hình provider local/Gemini, token và tùy chọn; xem hướng dẫn trong `backend/README.md`.
+Cấu hình đã kiểm chứng: Windows 11, CPU Intel i5-10300H (4 nhân), RAM 16 GB, không cần GPU. Cần khoảng 5 GB đĩa trống và Internet cho lần cài đầu.
 
-## Chạy backend trước
+| Phần mềm | Phiên bản đã kiểm chứng | Dùng cho |
+| --- | --- | --- |
+| Git | bất kỳ | lấy code |
+| Node.js | ≥ 22 (đang dùng 24.19) | backend |
+| Python | 3.10–3.12 (đang dùng 3.12.4) | voice bridge |
+| FFmpeg | 9.x (Gyan build) | chuyển MP3 của Edge TTS sang PCM |
+| Ollama | 0.40.x + model `qwen2.5:3b` (~1,9 GB) | mô hình ngôn ngữ |
+| Giọng Windows "Microsoft An" (tiếng Việt) | gói giọng nói Windows | giọng đọc offline khi Edge TTS lỗi |
+| VS Code + PlatformIO (Core 6.x) | chỉ khi cần nạp firmware | firmware ESP32 |
 
-Yêu cầu Node.js 22 trở lên. Trong terminal tại `E:\AIoT\Code`:
+### Bước 1 – Cài phần mềm
+
+Mở **PowerShell** và chạy:
+
+```powershell
+winget install --id Git.Git -e
+winget install --id OpenJS.NodeJS.LTS -e
+winget install --id Python.Python.3.12 -e
+winget install --id Gyan.FFmpeg.Shared -e
+winget install --id Ollama.Ollama -e
+```
+
+Đóng và mở lại PowerShell để nhận PATH mới, rồi kiểm tra:
+
+```powershell
+git --version; node -v; py -3.12 --version; ffmpeg -version | Select-Object -First 1; ollama --version
+```
+
+### Bước 2 – Tải model ngôn ngữ Qwen
+
+```powershell
+ollama pull qwen2.5:3b
+```
+
+### Bước 3 – Cài giọng đọc tiếng Việt offline của Windows
+
+**Settings → Time & language → Speech → Manage voices → Add voices → Tiếng Việt (Vietnamese)**. Kiểm tra (phải in ra `MSTTS_V110_viVN_An`):
+
+```powershell
+Get-ChildItem HKLM:\SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens | Where-Object PSChildName -match viVN | Select-Object -ExpandProperty PSChildName
+```
+
+Thiếu giọng này hệ thống vẫn chạy, nhưng khi Edge TTS lỗi sẽ phải dùng giọng tiếng Anh đọc tiếng Việt.
+
+### Bước 4 – Lấy code và cài thư viện backend
+
+```powershell
+git clone https://github.com/khaiho150405-pixel/IOT_BackEnd.git AIoT
+cd AIoT\backend
+npm.cmd ci
+cd ..
+```
+
+### Bước 5 – Cài gói Python cho voice bridge
+
+```powershell
+py -3.12 -m pip install -r backend\requirements-local-voice.txt
+py -3.12 -c "import sys; print(sys.executable)"
+```
+
+Ghi lại đường dẫn `python.exe` in ra ở lệnh thứ hai (ví dụ `C:\Users\<tên>\AppData\Local\Programs\Python\Python312\python.exe`) để điền vào `LOCAL_VOICE_PYTHON` ở bước 7.
+
+### Bước 6 – Tạo model nhận dạng tiếng Việt PhoWhisper (một lần, ~10 phút)
+
+Tải [vinai/PhoWhisper-base](https://huggingface.co/vinai/PhoWhisper-base) (~290 MB, giấy phép BSD-3) và chuyển sang CTranslate2 int8 (~80 MB):
+
+```powershell
+py -3.12 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+py -3.12 -m pip install -r backend\requirements-model-convert.txt
+py -3.12 scripts\setup-phowhisper.py
+```
+
+Kết quả nằm ở `models\phowhisper-base-ct2` (đã có trong `.gitignore`). Có thể gỡ `torch`/`transformers` sau bước này. Lần chạy backend đầu tiên còn tự tải Whisper `base` (~150 MB, dùng cho tiếng Anh) vào cache Hugging Face.
+
+### Bước 7 – Cấu hình backend
+
+```powershell
+Copy-Item backend\.env.example backend\.env
+node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
+```
+
+Mở `backend\.env` và sửa:
+
+| Biến | Giá trị |
+| --- | --- |
+| `LOCAL_VOICE_PYTHON` | đường dẫn `python.exe` từ bước 5 |
+| `LOCAL_WHISPER_MODEL` | giữ `../models/phowhisper-base-ct2` (tính từ thư mục `backend`) |
+| `DEVICE_TOKEN` | chuỗi ngẫu nhiên vừa tạo; **phải trùng** `WS_TOKEN` trong `include/config.h` của firmware |
+| `ADMIN_PIN` | đổi PIN điều khiển trên trang `/mobile` |
+| `VAD_RMS`, `SPEAKER_VOLUME` | giữ `325` và `0.5` nếu firmware dùng `MIC_SHIFT = 17` |
+
+Chỉ sao chép `.env.example` khi chưa có `.env`. Không commit `.env` và không gửi token/key qua chat.
+
+### Bước 8 – Mở tường lửa cho ESP32
+
+Lần đầu chạy backend, Windows hỏi quyền mạng cho Node.js: chọn **Private networks**. Nếu ESP32 kết nối qua **Mobile Hotspot** của laptop, chạy (PowerShell **Run as Administrator**):
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\fix-hotspot-firewall.ps1
+```
+
+## 2. Chạy hệ thống
+
+Từ thư mục gốc repo:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-local-xiaozhi.ps1
+```
+
+Script kiểm tra `.env`, Python, gói Python, model PhoWhisper, tự bật Ollama nếu chưa chạy rồi khởi động backend (dừng bằng `Ctrl+C`). Chỉ kiểm tra cấu hình mà không chạy: thêm `-CheckOnly`.
+
+Hoặc chạy thủ công:
 
 ```powershell
 cd backend
-npm.cmd ci
-Copy-Item .env.example .env
-```
-
-Chỉ sao chép `.env.example` khi chưa có `.env`, tránh ghi đè cấu hình riêng. Chế độ hiện cấu hình trong `backend/.env` là `AI_PROVIDER=ollama`; không cần Gemini key. Để đổi sang Gemini, đặt `AI_PROVIDER=gemini` và thêm `GEMINI_API_KEY`. Tạo token ngẫu nhiên bằng lệnh dưới rồi đặt cùng giá trị cho `DEVICE_TOKEN` ở `.env` và `WS_TOKEN` ở `include/config.h`:
-
-```powershell
-node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"
 npm.cmd run build
 npm.cmd start
 ```
 
-Hoặc chạy từ thư mục gốc bằng `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\scripts\start-local-xiaozhi.ps1"`; script khởi chạy Ollama và backend local.
+Backend sẵn sàng khi log hiện (5–90 giây tùy máy đã nạp model chưa):
 
-Khi `AI_PROVIDER=gemini`, chọn `GEMINI_MODEL`/`GEMINI_TTS_MODEL` mà tài khoản hỗ trợ; lỗi 400/404 thường cần kiểm tra model/cấu hình, lỗi 401/403 kiểm tra key/quyền và lỗi 429 kiểm tra quota. Chế độ `ollama` dùng model local, không cần Gemini key. Không dán key vào source hoặc chat. `http://localhost:3000/health` chỉ xác nhận backend chạy.
+```
+Local Whisper model ../models/phowhisper-base-ct2 ready.
+Local voice bridge ready at http://127.0.0.1:8010
+Local LLM ready; kept loaded for the demo.
+[AIoT] Server is listening at http://0.0.0.0:3000
+```
 
-Sau khi backend chạy, mở `http://localhost:3000/dashboard` trên laptop để dùng AIoT Control Desk. Bảng điều khiển hiển thị ESP32 online/offline, nhiệt độ, độ ẩm, trạng thái bận, cho bật/tắt LED WS2812B trên testboard qua lệnh WebSocket có ACK, và có ô nhập câu tự nhiên.
+Cấp nguồn ESP32: log hiện `Device hello accepted: <MAC>`, OLED hiện `Listen` là có thể nói.
 
-**Điều khiển bằng điện thoại & laptop qua MQTT / Web Mobile:**
-- **Giao diện Web Mobile trên điện thoại:** Mở `http://<IP_LAN_BACKEND>:3000/mobile` từ bất kỳ điện thoại/laptop nào trong cùng mạng Wi-Fi để xem cảm biến nhiệt độ/độ ẩm real-time, bật/tắt đèn và chat với AI.
-- **Cơ chế MQTT:** Backend tích hợp sẵn MQTT Broker nhúng tại cổng `1883` (hoặc kết nối broker ngoài qua `MQTT_BROKER_URL`). Bất kỳ ứng dụng MQTT nào trên điện thoại (như *IoT MQTT Panel*, *MQTT Dash*) hoặc laptop (*MQTT Explorer*) đều có thể điều khiển:
-  - `aiot/led/set`: gửi `on` hoặc `off` để bật/tắt đèn LED.
-  - `aiot/command`: gửi JSON `{"action":"led","state":"on"|"off"}` hoặc `{"action":"text","text":"Nhiệt độ phòng?"}` để ra lệnh AI.
-  - `aiot/sensor`: nhận dữ liệu nhiệt độ và độ ẩm real-time từ cảm biến DHT22.
-  - `aiot/state`: nhận trạng thái kết nối và trạng thái đèn LED.
-  - `aiot/chat`: nhận transcript câu hỏi và câu trả lời của AI.
-  - Test nhanh bằng script trên laptop: `node scripts/mqtt-client-demo.js [on|off|ask|monitor]`.
+### Kiểm tra máy AI worker đã giống hệ thống gốc
 
-**Cấu hình Wi-Fi & IP Server bằng điện thoại (WiFiManager / Captive Portal):**
-- **Không cần cắm cáp nạp lại code:** ESP32 lưu thông tin Wi-Fi và IP Server vào bộ nhớ Flash (NVS Preferences).
-- **Cách vào chế độ cài đặt:**
-  1. *Chủ động:* Nhấn giữ nút **BOOT (GPIO 0)** trên ESP32 trong **3 giây**.
-  2. *Tự động:* Nếu bật nguồn mà không kết nối được Wi-Fi sau 25 giây, ESP32 sẽ tự động chuyển sang chế độ cài đặt.
-- Màn hình OLED sẽ hiển thị thông báo: `CAU HINH WI-FI`, phát Wi-Fi tên `AIoT_Smart_Room`.
-- Lấy điện thoại kết nối vào Wi-Fi `AIoT_Smart_Room`, trang web cấu hình tiếng Việt sẽ tự động bật lên (hoặc mở trình duyệt gõ `192.168.4.1`).
-- Chọn mạng Wi-Fi trong phòng, nhập Mật khẩu, nhập IP Laptop đang chạy backend và bấm **"LƯU VÀ KẾT NỐI"**. ESP32 sẽ lưu vĩnh viễn và tự động kết nối vào mạng mới.
-- Thiết bị có thể cấp nguồn hoàn toàn độc lập bằng củ sạc điện thoại 5V hoặc sạc dự phòng, không cần cắm vào máy tính.
+| Kiểm tra | Kết quả mong đợi |
+| --- | --- |
+| `cd backend; npm.cmd test` | toàn bộ test `pass`, `fail 0` |
+| `http://localhost:3000/health` | `{"status":"ok",...}` |
+| `http://localhost:3000/dashboard` | thấy ESP32 online, nhiệt độ/độ ẩm, nút bật/tắt LED |
+| Nói "Bật đèn lên" | log `[Qwen] ... intent=led_on`, LED bật, ESP32 nói "Em đã bật đèn, đại ca." |
+| Nói "Một cộng một bằng mấy" | ESP32 trả lời "1 cộng 1 bằng 2" |
 
-Đây chưa phải công tắc đèn điện lưới; muốn điều khiển đèn phòng cần module relay phù hợp và phần cứng đấu nối riêng.
+Trên điện thoại cùng mạng: `http://<IP máy AI worker>:3000/mobile`.
 
-## Đấu dây
+## 3. Firmware ESP32-S3
+
+1. Sao chép `include\config.example.h` thành `include\config.h` rồi sửa `WIFI_SSID`, `WIFI_PASSWORD` (Wi-Fi 2.4 GHz), `WS_HOST` (IP LAN của máy AI worker, không dùng `localhost`, không có `ws://`), `WS_PORT=3000`, `WS_TOKEN` (trùng `DEVICE_TOKEN`).
+2. Giữ `MIC_SHIFT = 17` (đi cùng `VAD_RMS=325`). Giá trị 16 làm tiếng bị méo khi nói gần micro.
+3. Cắm ESP32-S3 vào cổng USB native, mở thư mục repo bằng VS Code + PlatformIO, chọn environment `esp32-s3-n16r8`, **Build** rồi **Upload**. Lệnh tương đương:
+
+```powershell
+pio run -e esp32-s3-n16r8
+pio run -e esp32-s3-n16r8 -t upload --upload-port COM6
+pio device monitor --baud 115200
+```
+
+Thay `COM6` bằng cổng thực tế (Device Manager → Ports). Nếu không vào chế độ nạp: giữ BOOT, nhấn rồi thả RESET, thả BOOT rồi Upload lại. Lưu ý: mở Serial Monitor trên cổng USB native sẽ làm board khởi động lại. Nếu board chỉ có cầu USB-UART, đổi `ARDUINO_USB_CDC_ON_BOOT` thành `0` trong `platformio.ini`.
+
+Firmware đọc cả hai kênh I2S của INMP441 và tự chọn kênh có tín hiệu; backend in `microphone slot N` khi nhận được.
+
+**Đổi Wi-Fi/IP không cần nạp lại:** giữ nút **BOOT (GPIO 0) 3 giây** (hoặc để ESP32 tự vào chế độ này khi không nối được Wi-Fi sau 25 giây). OLED hiện `CAU HINH WI-FI` và phát Wi-Fi `AIoT_Smart_Room`. Dùng điện thoại kết nối vào, trang cấu hình tự mở (hoặc vào `192.168.4.1`), chọn Wi-Fi, nhập mật khẩu và IP máy AI worker, bấm **LƯU VÀ KẾT NỐI**. Cấu hình lưu trong flash.
+
+## 4. Đấu dây và nguồn điện
 
 Các module và ESP32 phải nối chung GND.
 
@@ -79,90 +209,84 @@ Các module và ESP32 phải nối chung GND.
 | INMP441 | WS / SCK / SD | 4 / 5 / 6 |
 | MAX98357A | LRC / BCLK / DIN | 15 / 16 / 17 |
 
-- INMP441 cấp 3.3 V, L/R nối GND để chọn kênh trái.
-- DHT22 cấp 3.3 V; nếu dùng cảm biến rời, kéo DATA lên 3.3 V bằng điện trở 4.7–10 kΩ.
-- OLED dùng nguồn 3.3 V và địa chỉ mặc định `0x3C`; sửa cấu hình nếu module dùng `0x3D`.
-- MAX98357A dùng nguồn phù hợp module (thường 5 V); SD/EN phải ở trạng thái bật theo module. Loa nối giữa OUT+ và OUT−, không nối một đầu loa xuống GND. Firmware gửi cùng mẫu sang hai kênh I2S.
-- WS2812B dùng nguồn phù hợp và đủ dòng; với nguồn 5 V nên dùng bộ chuyển mức logic 3.3→5 V. `LED_COUNT` mặc định 1, dành cho LED ngoài tại GPIO 11.
+- INMP441 cấp 3.3 V, L/R nối GND. **Lỗ thu âm nằm ở mặt dưới bo** — không cắm úp sát breadboard, hướng lỗ về phía người nói, nói cách 5–30 cm.
+- DHT22 cấp 3.3 V; cảm biến rời cần điện trở kéo lên 4.7–10 kΩ ở DATA.
+- OLED 3.3 V, địa chỉ `0x3C` (sửa cấu hình nếu là `0x3D`).
+- MAX98357A thường cấp 5 V; loa nối giữa OUT+ và OUT− (không nối loa xuống GND).
+- WS2812B: nguồn đủ dòng; với 5 V nên có chuyển mức logic 3.3→5 V.
 
-## Cấu hình và nạp
+**Nguồn điện (quan trọng):** khi cấp nguồn chỉ từ cổng USB laptop, ESP32 từng tự khởi động lại ngay sau khi loa phát (sụt áp do MAX98357A) và micro bị nhiễu ù ~85 Hz. Nên dùng củ sạc 5 V ≥ 2 A, thêm tụ 470–1000 µF sát nguồn MAX98357A, tụ 100 nF + 10 µF sát VDD–GND của INMP441, dây micro ngắn và đặt xa ampli. Backend tự giảm âm lượng (`SPEAKER_VOLUME=0.5`) và lọc tiếng ù dưới 120 Hz; log `Device ... rebooted` báo khi ESP32 bị reset.
 
-1. Mở thư mục này bằng VS Code có PlatformIO IDE.
-2. Sửa `WIFI_SSID`, `WIFI_PASSWORD`, `WS_HOST`, `WS_PORT`, `WS_PATH`, `WS_TOKEN` trong `include/config.h`. Nếu chưa có file này, sao chép từ `include/config.example.h`. Wi-Fi cần hỗ trợ 2.4 GHz. `WS_HOST` chỉ chứa IP/hostname, không có `ws://`; dùng IP LAN của máy chạy backend, không dùng `localhost`. Cho phép backend qua Windows Firewall trên mạng Private nếu cần.
-3. Kết nối ESP32-S3 N16R8 qua USB, chọn environment `esp32-s3-n16r8`, bấm Build rồi Upload.
-4. Mở Serial Monitor ở 115200 baud. Firmware in dung lượng flash/PSRAM và IP khi nối Wi-Fi.
+Đây chưa phải công tắc đèn điện lưới; điều khiển đèn phòng cần module relay và đấu nối riêng.
 
-Lệnh tương đương trong terminal PlatformIO:
+## 5. Sử dụng
 
-```powershell
-pio run
-pio run --target upload
-pio device monitor --baud 115200
-```
+- Khi OLED hiện `Listen`, thử: "Xin chào em", "Bật đèn lên", "Tắt đèn đi", "Nhiệt độ trong phòng bao nhiêu", "Kể chuyện cười đi", "Làm thơ về mùa thu", "Ba cộng bốn bằng mấy", "Hello".
+- AI làm ngay yêu cầu, không hỏi lại; chỉ hỏi lại khi câu nghe sai đến mức không đoán được ý, hoặc với câu phủ định về đèn ("Đừng tắt đèn").
+- Hủy lượt đang xử lý hoặc dừng nói/nhạc: **nhấn rồi thả BOOT** khi board đang chạy (không nhấn RESET).
+- Nhạc: thêm file WAV PCM16 mono 16 kHz (≤ 10 MB) vào `backend/music` và khai báo trong `backend/music/catalog.json` (hoặc đặt file `.mp4` trong `backend/music/mp4`). Chuyển đổi: `ffmpeg -i input.mp3 -ac 1 -ar 16000 -c:a pcm_s16le backend/music/song.wav`. Thư viện trống thì AI nói thật là chưa có bài.
+- **MQTT** (broker nhúng cổng 1883, hoặc broker ngoài qua `MQTT_BROKER_URL`), dùng được với IoT MQTT Panel, MQTT Dash, MQTT Explorer:
+  - `aiot/led/set`: gửi `on`/`off`.
+  - `aiot/command`: `{"action":"led","state":"on"}` hoặc `{"action":"text","text":"Nhiệt độ phòng?"}`.
+  - `aiot/sensor`, `aiot/state`, `aiot/chat`: nhận cảm biến, trạng thái, hội thoại.
+  - Thử nhanh: `node backend/scripts/mqtt-client-demo.js [on|off|ask|monitor]`.
 
-Nếu cần chọn cổng: `pio run --target upload --upload-port COM5` (thay COM5 bằng cổng thực tế). Nếu không vào chế độ nạp: giữ BOOT, nhấn rồi thả RESET, thả BOOT và thử Upload lại. Cấu hình Serial hiện dùng USB CDC native của ESP32-S3; dùng cổng USB native để xem log. Nếu board chỉ dùng cầu USB-UART, đổi `ARDUINO_USB_CDC_ON_BOOT` thành `0`.
+## 6. Xử lý sự cố
 
-`include/config.h` và `backend/.env` đã được thêm vào `.gitignore`. Không chia sẻ hai file chứa Wi-Fi/token; bàn giao các file example. Token phải khớp giữa firmware và backend.
+| Hiện tượng | Cách xử lý |
+| --- | --- |
+| `Port 3000 is already in use` / `A local voice bridge is already running` | Backend cũ còn chạy: `Get-CimInstance Win32_Process \| Where-Object { $_.CommandLine -like '*dist/src/main.js*' -or $_.CommandLine -like '*local-voice-bridge.py*' } \| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }` |
+| `Local voice Python is missing` | Sai `LOCAL_VOICE_PYTHON` trong `backend/.env` (xem bước 5) |
+| `Whisper model directory is incomplete` | Chưa chạy `scripts\setup-phowhisper.py`, hoặc sai `LOCAL_WHISPER_MODEL` |
+| `FFmpeg is required` | Cài FFmpeg (bước 1) hoặc đặt `FFMPEG_EXE` trỏ tới `ffmpeg.exe` |
+| AI trả lời "đang suy nghĩ hơi chậm" | Ollama chưa chạy: `ollama serve`, kiểm tra `ollama list` có `qwen2.5:3b` |
+| Giọng đọc chậm, log `Edge-TTS failed` | Edge TTS (miễn phí) đang chập chờn; hệ thống tự dùng giọng "Microsoft An" trong 5 phút. Cần cài giọng ở bước 3 |
+| ESP32 không kết nối | Cùng mạng 2.4 GHz; `WS_HOST` đúng IP máy AI worker; token trùng; mở tường lửa (bước 8) |
+| ESP32 tự khởi động lại khi đang nói (`Device ... rebooted`) | Nguồn yếu: xem mục Nguồn điện; tạm giảm `SPEAKER_VOLUME` xuống `0.3` |
+| Nhận dạng ra chữ vô nghĩa / "em nghe chưa rõ" | Nói gần micro hơn (5–30 cm), lỗ micro không bị che, giảm nhiễu nguồn. Log `Voice capture: ... peak=` nên đạt ~3000–15000; `peak=32767` là quá to (méo) |
+| Thu nhầm tiếng nền liên tục | Tăng `VAD_RMS` (ví dụ 450) trong `backend/.env` |
 
-## Giao thức backend bắt buộc
+## Giao thức backend ↔ ESP32
 
-Firmware dùng **WebSocket RFC 6455 thuần** qua `ws://HOST:PORT/aiot`, có header `Authorization: Bearer <WS_TOKEN>`. Backend NestJS đi kèm dùng thư viện `ws`, không dùng Socket.IO. Đây là giao thức tùy chỉnh; không có wrapper `{event,data}`. Kết nối ESP32→backend hiện chưa mã hóa, chỉ dùng trong LAN tin cậy; không mở port này trực tiếp ra Internet. Backend gọi Ollama loopback ở chế độ local hoặc Gemini qua HTTPS. Token chung chỉ phù hợp bản mẫu; triển khai nhiều thiết bị cần token riêng, TLS và quản lý quyền.
+Firmware dùng **WebSocket RFC 6455 thuần** qua `ws://HOST:PORT/aiot`, header `Authorization: Bearer <WS_TOKEN>` (thư viện `ws`, không dùng Socket.IO, không có wrapper `{event,data}`). Kết nối chưa mã hóa — chỉ dùng trong LAN tin cậy, không mở cổng ra Internet. Khi một thiết bị kết nối lại (ví dụ sau khi khởi động lại), kết nối mới thay thế kết nối cũ ngay.
 
-Sau khi kết nối, thiết bị gửi text JSON:
+Sau khi kết nối, thiết bị gửi:
 
 ```json
 {"type":"hello","device_id":"MAC","audio":{"format":"pcm_s16le","sample_rate":16000,"channels":1},"max_audio_chunk_bytes":4096,"led_enabled":true}
 ```
 
-Khi trạng thái `Listen`, thiết bị gửi binary **PCM signed 16-bit little-endian, mono, 16000 Hz**, tối đa 256 mẫu/512 byte mỗi lần. Backend gom đoạn âm thanh bằng ngưỡng RMS, kết thúc sau khoảng 900 ms im lặng hoặc tối đa 12 giây. Chế độ local gửi WAV tới Vosk tiếng Việt rồi đưa transcript qua Ollama; chế độ Gemini gửi WAV trực tiếp cho Gemini để tự nhận ngôn ngữ, phiên âm, chọn ý định và trả lời. Đây không phải nhận dạng streaming từng từ. Mỗi 2 giây thiết bị gửi thông số:
+Khi ở trạng thái `Listen`, thiết bị gửi binary **PCM signed 16-bit LE, mono, 16 kHz**, tối đa 256 mẫu mỗi gói. Backend lọc tiếng ù (high-pass 120 Hz), gom câu bằng ngưỡng RMS (`VAD_RMS`), kết thúc sau `VAD_SILENCE_MS` im lặng hoặc tối đa `VAD_MAX_MS`, gửi WAV cho voice bridge nhận dạng rồi đưa chữ qua Qwen. Mỗi 2 giây thiết bị gửi:
 
 ```json
-{"type":"sensor","valid":true,"temperature":28.5,"humidity":65.0,"uptime_ms":12345}
+{"type":"sensor","valid":true,"temperature":28.5,"humidity":65.0,"uptime_ms":12345,"mic_slot":0,"mic_scores":[181994,0]}
 ```
 
-Nếu DHT22 đọc lỗi, `valid=false` và hai giá trị là `null`.
+DHT22 lỗi thì `valid=false` và hai giá trị là `null`. `uptime_ms` giảm nghĩa là thiết bị vừa khởi động lại.
 
-Server gửi text JSON để điều khiển:
+Server gửi (mỗi dòng là một message riêng):
 
 ```json
 {"type":"command","id":"unique-command-id","device":"led","action":"on"}
-{"type":"command","id":"unique-command-id","device":"led","action":"off"}
 {"type":"command","device":"led","action":"color","r":0,"g":80,"b":255}
 {"type":"chat","reply":"Xin chào"}
 {"type":"transcript","text":"Nhiệt độ trong phòng bao nhiêu?","language":"vi"}
 {"type":"status","state":"thinking"}
 {"type":"status","state":"listening"}
-{"type":"audio_start","mode":"speech"}
-{"type":"audio_end"}
+{"type":"audio_start","id":"...","mode":"speech"}
+{"type":"audio_end","id":"..."}
 {"type":"audio_stop"}
 ```
 
-Các dòng trên là các message riêng biệt. `led_enabled` trong `hello` đồng bộ lại trạng thái logic sau khi backend hoặc WebSocket khởi động lại; firmware cũ không có trường này sẽ được hiển thị là chưa xác định cho tới ACK kế tiếp. ACK có cùng `id`, `device`, `action` và trạng thái `enabled`; backend chỉ xác nhận thành công sau khi nhận ACK đúng trong 3 giây. Đây là trạng thái phần mềm mà firmware báo, không phải phép đo quang học xác nhận LED có sáng vật lý hay không. Lệnh sai trả `{"type":"error","message":"..."}`. `reply` và `transcript` được in Serial; backend còn gửi `display` chứa bitmap để hiển thị chúng trên OLED. Firmware vẫn hỗ trợ JSON `color`, còn voice assistant hiện xử lý bật/tắt theo yêu cầu.
+ACK lệnh LED phải có cùng `id`, `device`, `action` và `enabled` trong 3 giây thì backend mới xác nhận thành công (trạng thái phần mềm firmware báo, không phải đo ánh sáng thật). ESP32 gửi `{"type":"playback_done","id":"..."}` khi loa phát hết; backend mới gửi `listening`. Message `display` chứa bitmap OLED (`batch`, `index`, `total` 1–32, `bitmap` base64 768 byte, 128×48 row-major, bit cao trước) nằm dưới 16 pixel header nhiệt độ/độ ẩm/trạng thái.
 
-Mỗi message `display` có `batch`, `index` (từ 0), `total` (1–32), `bitmap` base64 của 768 byte. Bitmap row-major 128×48, bit cao trước; phần này nằm dưới 16 pixel header. Trang tự đổi sau 4 giây và lặp lại đến hội thoại tiếp theo. Header luôn có nhiệt độ/độ ẩm, trạng thái và LED ON/OFF. Font chạy trên máy backend: tiếng Việt/Anh đã có bản xem trước; ngôn ngữ khác cần font tương ứng trên server hoặc `FONT_DIR`/`OLED_FONT`. Không thể cam kết mọi hệ chữ khi máy thiếu font.
+Âm thanh trả về là binary **PCM16 LE mono 16 kHz**, 640 byte mỗi 20 ms (firmware không giải mã MP3/WAV). Mỗi message có số byte chẵn, tối đa 4096 byte, không fragmentation. Mic tạm tắt khi server bận hoặc đang phát để tránh tự nghe lại.
 
-Âm thanh trả về là binary **PCM16 LE / mono / 16 kHz**. Backend chuyển đầu ra Edge TTS hoặc Gemini TTS sang PCM16 rồi gửi 640 byte mỗi 20 ms. Firmware không giải mã MP3/WAV. Mỗi WebSocket message hoàn chỉnh có số byte chẵn, tối đa 4096 byte; không fragmentation. `audio_start` mở lượt phát, `audio_end` cho phép bộ đệm phát hết, `audio_stop` hủy ngay. Mic bị tạm ngắt khi server bận hoặc đang phát để hạn chế tự nghe lại. Nếu TTS lỗi, câu trả lời chữ vẫn hiển thị và có thông báo Audio unavailable.
+## Kiểm thử
 
-## Cách sử dụng và nhạc
+- `cd backend; npm.cmd test`: VAD, lọc high-pass, âm lượng loa, WAV/resampling, bitmap OLED, xác thực, ACK, kết nối lại, lịch sử, nhạc, phân loại ý định Qwen (giả lập), phép tính nói, giọng dự phòng không bị cache, và một vòng WebSocket đầy đủ với AI giả lập.
+- `npm.cmd run build`: kiểm tra TypeScript; `pio run`: kiểm tra firmware.
+- `npx.cmd tsx scripts/preview-oled.ts` (trong `backend`): tạo ảnh xem trước OLED.
+- Test đơn vị không gọi Ollama/Gemini thật. Độ chính xác nhận dạng phụ thuộc micro, khoảng cách và nguồn điện: hãy thử bằng giọng thật trên board sau khi cài.
 
-- Khi OLED hiện `Listen`, thử “Bật đèn”, “Tắt đèn”, “Nhiệt độ và độ ẩm trong phòng bao nhiêu?”. Chế độ local dùng ASR tiếng Việt; chọn Gemini để thử giọng nói đa ngôn ngữ. Nói rõ, từng lượt; chất lượng nhận diện còn phụ thuộc mic và tiếng ồn.
-- Khi muốn hủy xử lý hoặc dừng nhạc/giọng nói, **nhấn rồi thả BOOT khi board đang chạy**, không nhấn RESET. Đợi `Listen` rồi nói tiếp. Không nhận lệnh giọng nói trong lúc phát nhạc vì chế độ half-duplex.
-- Để phát nhạc, thêm file WAV **PCM16 mono 16 kHz** vào `backend/music`, tối đa 10 MB/file, và đăng ký ID/tên/file trong `backend/music/catalog.json`. Ví dụ trong `backend/README.md`. Danh mục ban đầu rỗng; hệ thống sẽ không tự tìm bài trên YouTube/Spotify.
-- Nếu có FFmpeg, chuyển file của nhóm: `ffmpeg -i input.mp3 -ac 1 -ar 16000 -c:a pcm_s16le backend/music/song.wav`. Chất lượng 16 kHz mono chủ yếu phục vụ lời nói, không phải hi-fi.
-
-## Hành vi và kiểm tra trên board
-
-- Mất kết nối: LED đỏ nếu LED đang bật; khi đã ra lệnh tắt thì LED vẫn tắt dù mất mạng. Trạng thái offline hiện trên OLED. Khi phát, LED đang bật nhấp nháy.
-- DHT22 đọc mỗi 2 giây. OLED làm mới mỗi 200 ms, tự chuyển trang. Lỗi DHT không làm dừng chương trình; dữ liệu cảm biến cũ quá 8 giây không được đưa làm số đo hiện tại cho AI.
-- Wi-Fi/WebSocket tự kết nối lại. Không có backend, cảm biến/OLED vẫn chạy nhưng chưa thể nhận diện giọng nói.
-- Mic được đọc/xả liên tục nhưng chỉ gửi khi server sẵn sàng, tránh phát lại mẫu cũ. Có timeout 90 giây để tự kết nối lại nếu server treo.
-- Kiểm tra flash ~16 MB và PSRAM ~8 MB trong log; thử ngắt/kết nối lại Wi-Fi, gửi on/off/color, rồi phát PCM mẫu trước khi nối pipeline AI.
-- Việc biên dịch chỉ xác nhận mã nguồn và thư viện tương thích. Âm lượng mic/loa, nguồn điện, timing âm thanh thực tế cần kiểm tra trên phần cứng.
-
-## Kiểm thử và giới hạn xác nhận
-
-`npm.cmd test` trong `backend` kiểm tra VAD, WAV/resampling, bitmap OLED, xác thực, ACK, lịch sử, giới hạn nhạc và một vòng WebSocket với AI giả lập. `npm.cmd run build` kiểm tra TypeScript; `pio run` kiểm tra firmware. Chạy `npx.cmd tsx scripts/preview-oled.ts` trong `backend` để tạo `.pio/oled-preview.png`.
-
-Các bài kiểm thử đơn vị không gọi Gemini thật; đã chạy smoke test local Qwen/Vosk cho lệnh đèn và câu hỏi cảm biến. Trước bàn giao cần thử âm thanh thực trên board và đo/điều chỉnh `VAD_RMS`/`MIC_SHIFT`. Không lưu audio thô vào DB; nếu bật PostgreSQL, bản phiên âm và câu trả lời được lưu. Không đưa key thật vào bản bàn giao.
-
-Tham khảo: [Gemini audio input](https://ai.google.dev/gemini-api/docs/generate-content/audio), [Gemini TTS](https://ai.google.dev/gemini-api/docs/generate-content/speech-generation), [PlatformIO](https://docs.platformio.org/en/latest/platforms/espressif32.html).
+Chế độ Gemini (tùy chọn, cần Internet): đặt `AI_PROVIDER=gemini` và `GEMINI_API_KEY` trong `backend/.env`. Lỗi 400/404 kiểm tra model, 401/403 kiểm tra key, 429 kiểm tra quota. Tham khảo: [Gemini audio](https://ai.google.dev/gemini-api/docs/generate-content/audio), [Gemini TTS](https://ai.google.dev/gemini-api/docs/generate-content/speech-generation), [PlatformIO ESP32](https://docs.platformio.org/en/latest/platforms/espressif32.html).

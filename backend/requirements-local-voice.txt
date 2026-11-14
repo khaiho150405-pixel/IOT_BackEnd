@@ -1,1 +1,8 @@
-faster-whisper==1.2.1
+# Python packages for the local voice bridge (backend/scripts/local-voice-bridge.py).
+# Python 3.10-3.12 (tested 3.12.4 on Windows 11). Install:
+#   python -m pip install -r backend/requirements-local-voice.txt
+faster-whisper==1.2.1        # speech recognition (PhoWhisper / Whisper, CPU int8)
+edge-tts==7.3.1              # natural Vietnamese voice (needs Internet)
+numpy>=1.26
+comtypes==1.4.17 ; sys_platform == "win32"   # offline Vietnamese Windows voice "Microsoft An"
+pyttsx3==2.99                # last-resort offline voice

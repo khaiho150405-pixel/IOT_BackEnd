@@ -5,6 +5,10 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $backendRoot = Join-Path $projectRoot 'backend'
 $envFile = Join-Path $backendRoot '.env'
 $ollama = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama.exe'
+if (!(Test-Path -LiteralPath $ollama)) {
+  $found = Get-Command ollama -ErrorAction SilentlyContinue
+  if ($found) { $ollama = $found.Source }
+}
 $voiceRoot = Join-Path $env:LOCALAPPDATA 'AIoT\xiaozhi-esp32-server\main\xiaozhi-server'
 $voicePython = Join-Path $voiceRoot '.venv\Scripts\python.exe'
 $voskModel = Join-Path $voiceRoot 'models\vosk\vosk-model-small-vn-0.4'
@@ -15,15 +19,25 @@ $asrEngine = $asrEngine.Trim().Trim('"', "'").ToLowerInvariant()
 $whisperModel = (Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^LOCAL_WHISPER_MODEL=' } | Select-Object -Last 1) -replace '^LOCAL_WHISPER_MODEL=', ''
 if (!$whisperModel) { $whisperModel = 'small' }
 $whisperModel = $whisperModel.Trim().Trim('"', "'")
+# The backend uses LOCAL_VOICE_PYTHON when set; check the same interpreter here.
+$configuredPython = (Get-Content -LiteralPath $envFile | Where-Object { $_ -match '^LOCAL_VOICE_PYTHON=' } | Select-Object -Last 1) -replace '^LOCAL_VOICE_PYTHON=', ''
+if ($configuredPython.Trim()) { $voicePython = $configuredPython.Trim().Trim('"', "'") }
 
 foreach ($path in @($backendRoot, $envFile, $ollama, $voicePython)) {
   if (!(Test-Path -LiteralPath $path)) { throw "Required local demo file is missing: $path" }
 }
 if ($asrEngine -eq 'whisper') {
-  & $voicePython -c 'import faster_whisper' 2>$null
+  & $voicePython -c 'import faster_whisper, edge_tts' 2>$null
   if ($LASTEXITCODE -ne 0) {
     $requirements = Join-Path $backendRoot 'requirements-local-voice.txt'
-    throw "Whisper package missing. Run: uv pip install --python `"$voicePython`" -r `"$requirements`""
+    throw "Voice packages missing. Run: `"$voicePython`" -m pip install -r `"$requirements`""
+  }
+  if ($whisperModel -match '[\\/]') {
+    # The backend (and its voice bridge) run from backend/, so relative paths start there.
+    $modelDir = if ([IO.Path]::IsPathRooted($whisperModel)) { $whisperModel } else { Join-Path $backendRoot $whisperModel }
+    if (!(Test-Path -LiteralPath (Join-Path $modelDir 'model.bin'))) {
+      throw "Whisper model folder is missing or incomplete: $modelDir. Create it with: python scripts\setup-phowhisper.py"
+    }
   }
 } elseif ($asrEngine -eq 'vosk') {
   if (!(Test-Path -LiteralPath $voskModel)) { throw "Vietnamese Vosk model is missing: $voskModel" }
@@ -71,7 +85,7 @@ if ($asrEngine -eq 'whisper') {
 } else {
   Write-Host 'Vietnamese speech recognition: Vosk'
 }
-Write-Host 'Speech output: Edge TTS (internet required)'
+Write-Host 'Speech output: Edge TTS (internet), offline Vietnamese Windows voice when Edge fails'
 Write-Host "Backend health: http://${lanIp}:3000/health"
 Write-Host 'The NestJS backend starts the loopback-only voice bridge and warms the model.'
 if ($CheckOnly) { exit 0 }

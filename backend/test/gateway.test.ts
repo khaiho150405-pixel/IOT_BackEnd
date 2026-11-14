@@ -313,3 +313,33 @@ test('actual NestJS bootstrap exposes health and authenticates WS without callin
   assert.equal(offlineCommand.status, 404);
   ws.close(); await once(ws, 'close');
 });
+
+test('a reconnecting device replaces its stale connection instead of being rejected', async t => {
+  process.env.DEVICE_TOKEN = 'local-test-token-with-at-least-24-characters';
+  const fakeAi = { async analyze() { throw new Error('unused'); }, async speak() { return Buffer.alloc(0); } };
+  const http = createServer();
+  const gateway = new AiotGateway(fakeAi as unknown as AiotService, new HistoryStore());
+  gateway.attach(http);
+  http.listen(0, '127.0.0.1'); await once(http, 'listening');
+  const address = `ws://127.0.0.1:${(http.address() as AddressInfo).port}/aiot`;
+  t.after(async () => { gateway.onModuleDestroy(); await new Promise<void>(resolve => http.close(() => resolve())); });
+  const hello = JSON.stringify({ type: 'hello', device_id: 'esp-reboot', audio: { format: 'pcm_s16le', sample_rate: 16000, channels: 1 } });
+  const connect = async () => {
+    const ws = new WebSocket(address, { headers: { Authorization: `Bearer ${process.env.DEVICE_TOKEN}` } });
+    const messages: any[] = [];
+    ws.on('message', (data, binary) => { if (!binary) messages.push(JSON.parse(data.toString())); });
+    await once(ws, 'open');
+    ws.send(hello);
+    await until(() => messages.some(m => m.type === 'status' && m.state === 'listening'));
+    return ws;
+  };
+  const stale = await connect();          // the old socket of a device that rebooted
+  const staleClosed = once(stale, 'close');
+  const fresh = await connect();          // must be accepted right away
+  await staleClosed;
+  assert.equal(fresh.readyState, WebSocket.OPEN);
+  const devices = gateway.dashboardDevices().filter((d: any) => d.id === 'esp-reboot');
+  assert.equal(devices.length, 1);
+  assert.equal(devices[0].connected, true);
+  fresh.close();
+});

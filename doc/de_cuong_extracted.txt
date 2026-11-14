@@ -1,0 +1,127 @@
+BỘ CÔNG THƯƠNG
+TRƯỜNG ĐẠI HỌC CÔNG THƯƠNG TP.HCM
+KHOA CÔNG NGHỆ THÔNG TIN
+ĐỀ CƯƠNG IOT
+ĐỀ TÀI: NHẬN DIỆN GIỌNG NÓI TÍCH HỢP API KEY AI
+Giảng viên hướng dẫn: TS. Lê Ngọc Hiếu
+Sinh viên thực hiện: 
+2001230365 – Hồ Sĩ Khải
+2001230990 – Tống Văn Trọng
+2001230174 – Cao Hải Đăng
+2001231033 – Đỗ Trọng Vĩ
+2001230757 – Huỳnh Quang Sang
+2001230915 – Phan Đức Thể
+2001231037 – Trần Quốc Việt
+TP.  Hồ Chí Minh, tháng 9  -  2026
+BỘ CÔNG THƯƠNG
+TRƯỜNG ĐẠI HỌC CÔNG THƯƠNG TP.HCM
+KHOA CÔNG NGHỆ THÔNG TIN
+ĐỀ CƯƠNG IOT
+ĐỀ TÀI: NHẬN DIỆN GIỌNG NÓI TÍCH HỢP API KEY AI
+Giảng viên hướng dẫn: TS. Lê Ngọc Hiếu
+Sinh viên thực hiện: 
+2001230365 – Hồ Sĩ Khải
+2001230990 – Tống Văn Trọng
+2001230174 – Cao Hải Đăng
+2001231033 – Đỗ Trọng Vĩ
+2001230757 – Huỳnh Quang Sang
+2001230915 – Phan Đức Thể
+2001231037 – Trần Quốc Việt
+TP.  Hồ Chí Minh, tháng 9  -  2026
+BẢNG PHÂN CÔNG CÔNG VIỆC
+--- TABLE ---
+STT | MSSV | HỌ VÀ TÊN | CÔNG VIỆC | HOÀN THÀNH
+1 | 2001230365 | Hồ Sĩ Khải |  | 
+2 | 2001230990 | Tống Văn Trọng |  | 
+3 | 2001230174 | Cao Hải Đăng |  | 
+4 | 2001231033 | Đỗ Trọng Vĩ |  | 
+5 | 2001230757 | Huỳnh Quang Sang |  | 
+6 | 2001230915 | Phan Đức Thể |  | 
+7 | 2001231037 | Trần Quốc Việt |  | 
+--- END TABLE ---
+MỤC LỤC
+BẢNG PHÂN CÔNG CÔNG VIỆCi
+MỤC LỤCii
+DANH MỤC HÌNH ẢNHiii
+DANH MỤC BẢNG BIỂUiv
+MỞ ĐẦU1
+CHƯƠNG 1. ĐẶT VẤN ĐỀ VÀ LÝ DO CHỌN ĐỀ TÀI1
+CHƯƠNG 2. MỤC TIÊU ĐỀ TÀI2
+CHƯƠNG 3. KIẾN TRÚC HỆ THỐNG VÀ CÔNG NGHỆ3
+3.1. Phần cứng3
+3.2. Phần mềm và Nền tảng3
+CHƯƠNG 4. YÊU CẦU THIẾT KẾ VÀ SƠ ĐỒ4
+4.1. Sơ đồ khối hệ thống tổng thể4
+4.2. Sơ đồ luồng dữ liệu4
+4.3. Sơ đồ đấu nối Pinout5
+CHƯƠNG 5. KỊCH BẢN VẬN HÀNH & LẮP ĐẶT6
+5.1. Sơ đồ vận hành6
+5.2. Sơ đồ bố trí lắp đặt8
+5.3. Dự toán kinh phí8
+CHƯƠNG 6. KẾ HOẠCH THỰC HIỆN9
+KẾT LUẬN10
+TÀI LIỆU THAM KHẢO11
+DANH MỤC HÌNH ẢNH
+No table of figures entries found.
+DANH MỤC BẢNG BIỂU
+No table of figures entries found.
+MỞ ĐẦU
+ĐẶT VẤN ĐỀ VÀ LÝ DO CHỌN ĐỀ TÀI
+Trong kỷ nguyên của nhà thông minh (Smart Home), các hệ thống điều khiển bằng giọng nói truyền thống thường dựa trên việc nhận diện các từ khóa cố định (Hard-coded keywords). Phương pháp này bộc lộ nhiều hạn chế khi người dùng giao tiếp một cách tự nhiên hoặc sử dụng các câu lệnh có cấu trúc phức tạp. Hệ thống thường không hiểu được ngữ cảnh mờ (vague context) hoặc ý định thực sự đằng sau lời nói.
+Việc tích hợp các Mô hình ngôn ngữ lớn (LLM) như Gemini API vào hệ thống IoT (AIoT) mang lại bước đột phá đáng kể. Khác với các hệ thống cũ, AIoT ứng dụng LLM có khả năng:
+Hiểu ngữ cảnh mờ: Thay vì chỉ nhận lệnh "Bật đèn", hệ thống có thể hiểu và xử lý các câu như "Tôi cảm thấy hơi tối" để tự động điều chỉnh độ sáng.
+Xử lý đa nhiệm: Phân tích và thực thi nhiều yêu cầu cùng lúc trong một câu lệnh duy nhất.
+Giao tiếp tự nhiên: Phản hồi người dùng bằng ngôn ngữ tự nhiên thông qua bộ chuyển đổi Text-to-Speech (TTS), tạo ra trải nghiệm người dùng liền mạch và thân thiện hơn.
+MỤC TIÊU ĐỀ TÀI
+Mục tiêu cốt lõi của đề tài là xây dựng một hệ thống AIoT hoàn chỉnh với các năng lực sau:
+Phân tích ý định: Sử dụng Gemini API để phân tích giọng nói người dùng, xác định hành động cần thực hiện dựa trên ngữ cảnh.
+Phản hồi âm thanh: Tích hợp công nghệ TTS để hệ thống có thể trả lời người dùng bằng giọng nói sau khi thực hiện lệnh hoặc cung cấp thông tin.
+Điều khiển thiết bị: Thực hiện điều khiển độ sáng và màu sắc đèn LED thông qua tín hiệu PWM và chuẩn WS2812B.
+Giám sát môi trường: Thu thập và phản hồi dữ liệu về nhiệt độ, độ ẩm môi trường từ cảm biến thực tế khi người dùng truy vấn.
+KIẾN TRÚC HỆ THỐNG VÀ CÔNG NGHỆ
+Phần cứng
+Hệ thống sử dụng các linh kiện điện tử hiện đại để đảm bảo hiệu suất và khả năng tích hợp:
+Xử lý trung tâm: Đổi ESP32 NodeMCU thành ESP32-S3 N16R8 DevKitC. (Ghi chú thêm: Phiên bản này tích hợp 8MB PSRAM rất lý tưởng để xử lý bộ đệm âm thanh lớn, tránh nghẽn cổ chai khi thu âm I2S).
+Hiển thị (Bổ sung mới): Thêm Màn hình LCD OLED 0.96 inch để giao tiếp trực quan (hiển thị trạng thái kết nối WiFi, nhiệt độ phòng và biểu tượng khi đang thu âm).
+Hệ thống nguồn (Bổ sung mới): Thêm Adapter 12V 1A kết hợp Mạch nguồn TestBoard 5V/3.3V để cấp nguồn rời ổn định, bảo vệ vi điều khiển khỏi sụt áp khi loa và LED hoạt động công suất cao.
+Phần mềm và Nền tảng
+Backend API: Phát triển bằng NestJS (Node.js framework) để xử lý logic nghiệp vụ và kết nối với AI.
+Web Dashboard: Xây dựng bằng Next.js để quản lý trạng thái thiết bị và theo dõi log hoạt động theo thời gian thực.
+Cơ sở dữ liệu: PostgreSQL dùng để lưu trữ log điều khiển và lịch sử dữ liệu từ cảm biến.
+Trí tuệ nhân tạo: Tích hợp Gemini API thông qua cơ chế Function Calling, giúp AI có thể trực tiếp gọi các hàm điều khiển thiết bị hoặc truy vấn database dựa trên yêu cầu của người dùng.
+YÊU CẦU THIẾT KẾ VÀ SƠ ĐỒ
+Sơ đồ khối hệ thống tổng thể
+Sơ đồ luồng dữ liệu
+Sơ đồ đấu nối Pinout
+KỊCH BẢN VẬN HÀNH & LẮP ĐẶT
+Hệ thống sẽ được thiết kế theo dạng mô hình thu nhỏ, mô phỏng không gian phòng thông minh. Các thiết bị được bố trí tối ưu để đảm bảo khả năng thu âm và tản nhiệt cho cảm biến.
+Sơ đồ vận hành
+Sơ đồ bố trí lắp đặt
+Dự toán kinh phí
+--- TABLE ---
+STT | Tên linh kiện | Số lượng | Đơn giá thực tế (VNĐ) | Thành tiền (VNĐ)
+1 | ESP32-S3 N16R8 DevKitC | 1 | 259.000 | 259.000
+2 | Cảm biến âm thanh INMP441 I2S | 1 | 45.000 | 45.000
+3 | Mạch khuếch đại âm thanh MAX98357 I2S | 1 | 75.000 | 75.000
+4 | Loa 4Ohm 3W | 1 | 18.000 | 18.000
+5 | Màn hình LCD Oled 0.96 inch | 1 | 72.000 | 72.000
+6 | Cảm biến độ ẩm nhiệt độ DHT22 | 1 | 130.000 | 130.000
+7 | Module led RGB WS2812 | 1 | 7.000 | 7.000
+8 | Adapter 12V 1A + Mạch nguồn TestBoard | 1 bộ | 35.000 + 19.000 | 54.000
+9 | Đế test board MB-102 | 1 | 25.000 | 25.000
+10 | Dây bus (đực-cái, đực-đực) | 4 | 4.000/bó | 16.000
+Tổng cộng | Toàn bộ chi phí phần cứng hệ thống AIoT |  |  | 701.000 VNĐ
+--- END TABLE ---
+KẾ HOẠCH THỰC HIỆN
+Quá trình thực hiện được chia làm 6 tuần với lộ trình cụ thể như sau:
+--- TABLE ---
+Tuần | Nội dung thực hiện | Kết quả dự kiến
+1 | Nghiên cứu tài liệu và mua sắm linh kiện phần cứng. | Đầy đủ linh kiện cần thiết.
+2 | Lắp ráp mạch thử nghiệm, kiểm tra giao tiếp I2S và cảm biến trên ESP32. | Phần cứng hoạt động ổn định.
+3 | Phát triển Backend NestJS, thiết lập Database PostgreSQL và tích hợp Gemini API. | API xử lý được các lệnh cơ bản.
+4 | Xây dựng giao diện Next.js Dashboard và hoàn thiện Function Calling cho AI. | Điều khiển được qua Web và Voice.
+5 | Tối ưu hóa Prompt AI, xử lý độ trễ âm thanh và tinh chỉnh ngữ cảnh mờ. | Hệ thống phản hồi thông minh, mượt mà.
+6 | Hoàn thiện mô hình vật lý, kiểm thử tổng thể và viết báo cáo đồ án. | Đồ án hoàn chỉnh.
+--- END TABLE ---
+KẾT LUẬN
+TÀI LIỆU THAM KHẢO

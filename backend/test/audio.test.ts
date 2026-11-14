@@ -110,3 +110,31 @@ test('history keeps last five exchanges and isolates devices', async () => {
   assert.deepEqual((await history.recent('device-a')).map(row => row.transcript), ['2', '3', '4', '5', '6']);
   assert.deepEqual(await history.recent('device-b'), []);
 });
+
+test('microphone high-pass removes the low hum but keeps speech-band tones', async () => {
+  const { HighPassFilter } = await import('../src/aiot/audio');
+  const tone = (hz: number) => {
+    const b = Buffer.alloc(32000);
+    for (let i = 0; i < 16000; i++) b.writeInt16LE(Math.round(8000 * Math.sin(2 * Math.PI * hz * i / 16000)), i * 2);
+    return b;
+  };
+  const rms = (b: Buffer) => {
+    let s = 0; for (let i = 8000; i < b.length; i += 2) s += b.readInt16LE(i) ** 2; // skip filter settling
+    return Math.sqrt(s / ((b.length - 8000) / 2));
+  };
+  const hum = rms(new HighPassFilter().process(tone(60)));
+  const speech = rms(new HighPassFilter().process(tone(1000)));
+  assert.ok(hum < 8000 / Math.SQRT2 * 0.3, `60 Hz hum must be attenuated, got rms ${hum}`);
+  assert.ok(speech > 8000 / Math.SQRT2 * 0.95, `1 kHz must pass, got rms ${speech}`);
+});
+
+test('speaker volume scales a copy and leaves cached speech untouched', async () => {
+  const { applySpeakerVolume } = await import('../src/aiot/audio');
+  const original = Buffer.alloc(8);
+  original.writeInt16LE(20000, 0); original.writeInt16LE(-20000, 2);
+  const quieter = applySpeakerVolume(original, 0.5);
+  assert.equal(quieter.readInt16LE(0), 10000);
+  assert.equal(quieter.readInt16LE(2), -10000);
+  assert.equal(original.readInt16LE(0), 20000, 'input buffer must not be modified');
+  assert.equal(applySpeakerVolume(original, 1), original);
+});

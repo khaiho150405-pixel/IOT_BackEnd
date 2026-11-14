@@ -28,6 +28,9 @@ backend/music/mp4/*.mp4
 !backend/music/mp4/.gitkeep
 backend/fonts/
 
+# Converted speech models (scripts/setup-phowhisper.py)
+models/
+
 # Python caches
 __pycache__/
 *.py[cod]

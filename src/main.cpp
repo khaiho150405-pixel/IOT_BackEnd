@@ -66,6 +66,10 @@ bool playbackSeen = false;
 char playbackId[48] = {};
 bool playbackAckPending = false;
 uint32_t lastAudioPacket = 0;
+// Microphone slot actually carrying the INMP441 signal (0 or 1 in the stereo
+// I2S frame) and a smoothed "speech-likeness" score per slot, see readMic().
+int micSlot = 0;
+float micScore[2] = {0, 0};
 
 void clearPlayback();
 
@@ -432,7 +436,12 @@ void setupAudio() {
   mic.mode = static_cast<i2s_mode_t>(I2S_MODE_MASTER | I2S_MODE_RX);
   mic.sample_rate = SAMPLE_RATE;
   mic.bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT;
-  mic.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
+  // Read both slots. With ONLY_LEFT the legacy ESP32-S3 driver can sample the
+  // empty (tri-stated) slot depending on the L/R strap and driver version: the
+  // backend then received a weak, muffled leak of the voice (peak ~3000 even
+  // with the mouth on the mic) that speech recognition could not decode.
+  // readMic() picks whichever slot carries the real signal.
+  mic.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
   mic.communication_format = I2S_COMM_FORMAT_STAND_I2S;
   mic.intr_alloc_flags = ESP_INTR_FLAG_LEVEL1;
   mic.dma_buf_count = 8;
@@ -703,9 +712,47 @@ void sendSensor() {
     doc["humidity"] = nullptr;
   }
   doc["uptime_ms"] = millis();
+  doc["mic_slot"] = micSlot; // diagnostics: which I2S slot carries the microphone
+  JsonArray scores = doc.createNestedArray("mic_scores");
+  scores.add(static_cast<long>(micScore[0]));
+  scores.add(static_cast<long>(micScore[1]));
   String output;
   serializeJson(doc, output);
   socketClient.sendTXT(output);
+}
+
+// Converts interleaved 32-bit stereo I2S frames to mono PCM16 from the slot that
+// carries the microphone. Each slot is scored by AC power x lag-1 correlation:
+// real audio is smooth (correlation ~0.9), while an empty slot is flat or holds
+// uncorrelated bit noise, so its score stays near zero. Scores are smoothed over
+// ~1 s and the slot only switches when the other one is clearly stronger.
+size_t readMic(const int32_t *frames, size_t count, int16_t *out) {
+  if (!count) return 0;
+  for (int slot = 0; slot < 2; ++slot) {
+    float mean = 0;
+    for (size_t i = 0; i < count; ++i) mean += static_cast<float>(frames[2 * i + slot] >> MIC_SHIFT);
+    mean /= count;
+    float power = 0, lag = 0, previous = 0;
+    for (size_t i = 0; i < count; ++i) {
+      const float value = static_cast<float>(frames[2 * i + slot] >> MIC_SHIFT) - mean;
+      power += value * value;
+      if (i) lag += value * previous;
+      previous = value;
+    }
+    const float correlation = power > 0 ? lag / power : 0;
+    const float score = (power / count) * (correlation > 0 ? correlation : 0);
+    micScore[slot] = micScore[slot] * 0.98f + score * 0.02f;
+  }
+  const int other = 1 - micSlot;
+  if (micScore[other] > micScore[micSlot] * 4 + 1) {
+    micSlot = other;
+    Serial.printf("Microphone slot -> %d (scores %.0f / %.0f)\n", micSlot, micScore[0], micScore[1]);
+  }
+  for (size_t i = 0; i < count; ++i) {
+    const int32_t value = frames[2 * i + micSlot] >> MIC_SHIFT;
+    out[i] = static_cast<int16_t>(constrain(value, -32768, 32767));
+  }
+  return count;
 }
 
 void networkTask(void *) {
@@ -729,8 +776,8 @@ void networkTask(void *) {
   bool hadWifi = false;
   bool buttonWasDown = false;
   uint32_t buttonDownAt = 0;
-  int32_t raw[MIC_SAMPLES];
-  int16_t pcm[MIC_SAMPLES];
+  static int32_t raw[MIC_SAMPLES * 2]; // interleaved stereo frames
+  static int16_t pcm[MIC_SAMPLES];
 
   for (;;) {
     // 1. Luon luon phuc vu Web Dashboard tren dien thoai
@@ -797,12 +844,8 @@ void networkTask(void *) {
     const esp_err_t status = i2s_read(I2S_NUM_0, raw, sizeof(raw), &bytesRead, 0);
     if (status == ESP_OK && bytesRead && connected && !serverBusy &&
         !(MUTE_MIC_DURING_PLAYBACK && speaking)) {
-      const size_t count = bytesRead / sizeof(int32_t);
-      for (size_t i = 0; i < count; ++i) {
-        int32_t value = raw[i] >> MIC_SHIFT;
-        pcm[i] = static_cast<int16_t>(constrain(value, -32768, 32767));
-      }
-      socketClient.sendBIN(reinterpret_cast<uint8_t *>(pcm), count * sizeof(int16_t));
+      const size_t count = readMic(raw, bytesRead / (2 * sizeof(int32_t)), pcm);
+      if (count) socketClient.sendBIN(reinterpret_cast<uint8_t *>(pcm), count * sizeof(int16_t));
     }
 
     // 5. Gui sensor DHT22
