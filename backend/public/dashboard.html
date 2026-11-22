@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>AIoT Control Desk</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#456780">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="AIoT">
+  <link rel="icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-180.png">
   <style>
     :root {
       font-family: "Segoe UI", Arial, sans-serif;
@@ -105,6 +111,11 @@
     .send-button:hover:not(:disabled) { background: #395c76; }
     .send-button:disabled { opacity: .4; cursor: not-allowed; }
     .chat-hint { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; color: #74818d; font-size: 10px; }
+    .install-btn { padding: 7px 11px; border: 1px solid #456780; border-radius: 7px; background: #456780; color: #fff; font-size: 12px; font-weight: 700; cursor: pointer; }
+    .secure-banner { margin: -18px 0 18px; padding: 10px 12px; border: 1px solid #e6cf9b; border-radius: 8px; background: #fbf5e6; color: #6d5414; font-size: 12px; line-height: 1.5; }
+    .secure-banner a { color: #6d5414; font-weight: 700; }
+    .live-dot { display: inline-block; width: 6px; height: 6px; margin-right: 5px; border-radius: 50%; background: #9aa6b0; vertical-align: middle; }
+    .live-dot.on { background: #2f855a; }
     .top-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
     .user-chip { display: flex; align-items: center; gap: 10px; padding: 7px 11px; border: 1px solid var(--line); border-radius: 7px; background: #fff; font-size: 12px; }
     .link-btn { padding: 0; border: 0; background: none; color: var(--blue); font-size: 12px; cursor: pointer; text-decoration: underline; }
@@ -161,9 +172,10 @@
         <div class="brand-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42m-9.88 9.88-1.42 1.42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.6"/></svg></div>
         <div><div class="brand-name">AIOT CONTROL DESK</div><div class="brand-sub">Bảng điều khiển hệ thống phòng</div></div>
       </div>
-      <div class="top-right"><div id="connection" class="connection"><span class="dot"></span><span id="connectionText">Đang kết nối backend</span></div><div id="userChip" class="user-chip" hidden><span id="userName"></span><button id="logoutBtn" class="link-btn" type="button">Đăng xuất</button></div></div>
+      <div class="top-right"><button id="installBtn" class="install-btn" type="button" hidden>⬇ Cài ứng dụng</button><div id="connection" class="connection"><span class="dot"></span><span id="connectionText">Đang kết nối backend</span></div><div id="userChip" class="user-chip" hidden><span id="userName"></span><button id="logoutBtn" class="link-btn" type="button">Đăng xuất</button></div></div>
     </header>
 
+    <div id="secureBanner" class="secure-banner" hidden>⚠ Kết nối này chưa mã hóa: mật khẩu có thể bị đọc trên mạng Wi-Fi. <a href="/trust">Cài chứng chỉ và mở bằng HTTPS</a> (cũng cần để cài dashboard thành ứng dụng).</div>
     <section class="intro">
       <div><div class="eyebrow">Bảng điều khiển thiết bị</div><h1>Phòng của đại ca.</h1><p>Theo dõi cảm biến và điều khiển các thiết bị tài khoản của bạn được phép dùng.</p></div>
       <select id="deviceSelect" class="device-select" aria-label="Chọn thiết bị" hidden></select>
@@ -247,7 +259,7 @@
         </form>
       </article>
     </section>
-    <footer class="footer"><span>AIoT dashboard · mọi thao tác được kiểm tra quyền và ghi nhật ký</span><span id="lastRefresh">Đang tải dữ liệu…</span></footer>
+    <footer class="footer"><span>AIoT dashboard · mọi thao tác được kiểm tra quyền và ghi nhật ký</span><span><span id="liveDot" class="live-dot" title="Kênh cập nhật trực tiếp"></span><span id="lastRefresh">Đang tải dữ liệu…</span></span></footer>
   </main>
   <div id="loginOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
     <form id="loginForm" class="login-card" autocomplete="on">
@@ -282,7 +294,10 @@
     // ---------------------------------------------------------------- session
     const SESSION_KEY = 'aiot_session';
     try { state.session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { state.session = null; }
-    function saveSession(next) { state.session = next; try { localStorage.setItem(SESSION_KEY, JSON.stringify(next)); } catch { } }
+    function saveSession(next) {
+      state.session = next; try { localStorage.setItem(SESSION_KEY, JSON.stringify(next)); } catch { }
+      if (typeof live !== 'undefined' && live.ws?.readyState === 1) live.ws.send(JSON.stringify({ type: 'auth', token: next.accessToken }));
+    }
     function clearSession() { state.session = null; try { localStorage.removeItem(SESSION_KEY); } catch { } }
     let refreshing = null;
     function refreshSession() {
@@ -318,6 +333,7 @@
       setTimeout(() => $('loginUser').focus(), 50);
     }
     function signedOut(message) {
+      disconnectLive();
       clearSession(); state.devices = []; state.users = []; render([]); renderAccount(); showLogin(message);
     }
     $('loginForm').addEventListener('submit', async event => {
@@ -331,7 +347,7 @@
         if (!response.ok) throw new Error(result.message || `Lỗi HTTP ${response.status}`);
         saveSession(result); $('loginPass').value = ''; $('loginOverlay').classList.remove('show');
         addEvent(`Đăng nhập: ${result.user.displayName} (${ROLE[result.user.role]})`, 'success');
-        renderAccount(); state.adminLoaded = 0; await refresh();
+        renderAccount(); state.adminLoaded = 0; await refresh(); connectLive();
       } catch (error) { $('loginError').textContent = error.message; }
       finally { $('loginButton').disabled = false; }
     });
@@ -443,8 +459,38 @@
       $('deviceDetails').innerHTML = `<div class="detail-row"><span>Tên</span><span>${esc(selected.name || selected.id)}</span></div><div class="detail-row"><span>Mã thiết bị</span><span>${esc(selected.id)}</span></div><div class="detail-row"><span>Phòng</span><span>${esc(room?.name || '—')}</span></div><div class="detail-row"><span>WebSocket</span><span>${selected.connected ? 'Đã kết nối' : 'Mất kết nối'}</span></div><div class="detail-row"><span>Quyền của bạn</span><span>Xem${selected.canControl ? ' · Điều khiển' : ''}${selected.canChat ? ' · Chat AI' : ''}</span></div>${selected.connectedAt ? `<div class="detail-row"><span>Kết nối từ</span><span>${new Date(selected.connectedAt).toLocaleString('vi-VN')}</span></div>` : ''}`;
       if (oldSelected !== state.selected) addEvent(`Đang theo dõi thiết bị ${selected.name || selected.id}`);
     }
+    // ---------------------------------------------------------------- live channel (/api/live)
+    const live = { ws: null, ready: false, retry: 0, timer: null };
+    function connectLive() {
+      if (!state.session || live.ws) return;
+      const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/live`);
+      live.ws = ws;
+      ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', token: state.session?.accessToken }));
+      ws.onmessage = async event => {
+        let message; try { message = JSON.parse(event.data); } catch { return; }
+        if (message.type === 'ready') { live.ready = true; live.retry = 0; $('liveDot').classList.add('on'); }
+        if (message.type === 'devices') {
+          render(message.devices || []);
+          $('lastRefresh').textContent = `Trực tiếp · ${new Date().toLocaleTimeString('vi-VN')}`;
+        }
+        if (message.type === 'auth_required' && await refreshSession()) ws.send(JSON.stringify({ type: 'auth', token: state.session.accessToken }));
+      };
+      ws.onclose = event => {
+        live.ws = null; live.ready = false; $('liveDot').classList.remove('on');
+        if (!state.session) return;
+        if (event.code === 4401) refreshSession();
+        // Reconnect with backoff; polling keeps the page current meanwhile.
+        clearTimeout(live.timer);
+        live.timer = setTimeout(connectLive, Math.min(15000, 1000 * 2 ** live.retry++));
+      };
+    }
+    function disconnectLive() { clearTimeout(live.timer); if (live.ws) { const ws = live.ws; live.ws = null; ws.onclose = null; ws.close(); } live.ready = false; $('liveDot').classList.remove('on'); }
+
     async function refresh() {
-      if (state.polling || !state.session) return; state.polling = true;
+      if (!state.session) return;
+      // With the live channel up, only the slower account data needs a periodic reload.
+      if (live.ready) { if (Date.now() - state.adminLoaded > 10000) await loadAccountData(); return; }
+      if (state.polling) return; state.polling = true;
       try {
         const result = await request('/api/devices');
         render(result.devices || []); $('lastRefresh').textContent = `Cập nhật lúc ${new Date().toLocaleTimeString('vi-VN')}`;
@@ -639,8 +685,31 @@
 
     // ---------------------------------------------------------------- start
     renderAccount();
-    if (state.session) refresh(); else { render([]); showLogin(); }
+    if (state.session) { refresh(); connectLive(); } else { render([]); showLogin(); }
     setInterval(refresh, 2000);
+
+    // ---------------------------------------------------------------- installable app (PWA)
+    const isLocalHost = ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+    $('secureBanner').hidden = location.protocol === 'https:' || isLocalHost;
+    if ('serviceWorker' in navigator && window.isSecureContext) {
+      navigator.serviceWorker.register('/sw.js').catch(error => console.warn('Service worker', error));
+    }
+    let installPrompt = null;
+    window.addEventListener('beforeinstallprompt', event => {
+      event.preventDefault(); installPrompt = event; $('installBtn').hidden = false;
+    });
+    $('installBtn').addEventListener('click', async () => {
+      if (installPrompt) {
+        installPrompt.prompt();
+        await installPrompt.userChoice.catch(() => null);
+        installPrompt = null; $('installBtn').hidden = true;
+      } else {
+        note('Trên iPhone: bấm Chia sẻ → Thêm vào MH chính (Safari).');
+      }
+    });
+    window.addEventListener('appinstalled', () => { $('installBtn').hidden = true; note('Đã cài ứng dụng AIoT.'); });
+    const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+    if (/iphone|ipad|ipod/i.test(navigator.userAgent) && !standalone && window.isSecureContext) $('installBtn').hidden = false;
   </script>
 </body>
 </html>

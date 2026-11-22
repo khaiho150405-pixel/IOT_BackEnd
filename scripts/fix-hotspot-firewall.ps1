@@ -1,26 +1,54 @@
 #Requires -RunAsAdministrator
-param([string]$NodePath = '', [int]$Port = 3000)
+# Opens the AIoT ports for devices on the Windows Mobile Hotspot (192.168.137.0/24) only:
+#   TCP 3000 (ESP32 + HTTP), TCP 3443 (HTTPS dashboard), UDP 5353 (mDNS name aiot.local).
+param([string]$NodePath = '', [int[]]$TcpPorts = @(3000, 3443), [int[]]$UdpPorts = @(5353))
 $ErrorActionPreference = 'Stop'
-if ($Port -lt 2 -or $Port -gt 65534) { throw 'Invalid port' }
+foreach ($p in $TcpPorts + $UdpPorts) { if ($p -lt 2 -or $p -gt 65534) { throw "Invalid port $p" } }
 if (!$NodePath) { $NodePath = (& node -e "console.log(require('node:fs').realpathSync.native(process.execPath))").Trim() }
 if (!(Test-Path -LiteralPath $NodePath)) { throw 'Node executable not found' }
 $NodePath = [IO.Path]::GetFullPath($NodePath)
-# Fix only automatic TCP user-deny rules for this exact Node executable.
-# Keep their block on every other TCP port and leave UDP rules untouched.
-$rules = @(Get-NetFirewallRule -Enabled True -Direction Inbound -Action Block | Where-Object {
-    $_.Name -like 'TCP Query User*' -and
-    (($_ | Get-NetFirewallApplicationFilter).Program -ieq $NodePath)
-})
-foreach ($rule in $rules) {
-    $filter = $rule | Get-NetFirewallPortFilter
-    if ($filter.Protocol -eq 'TCP' -and $filter.LocalPort -eq 'Any') {
-        $rule | Set-NetFirewallRule -LocalPort @("1-$($Port-1)", "$($Port+1)-65535")
-        Write-Host "Excluded TCP $Port from Node block: $($rule.Name)"
+
+# Port ranges covering 1-65535 except the given ports (Block rules override Allow rules).
+function Get-ComplementRanges([int[]]$Ports) {
+    $ranges = @(); $start = 1
+    foreach ($p in ($Ports | Sort-Object -Unique)) {
+        if ($p -gt $start) { $ranges += "$start-$($p - 1)" }
+        $start = $p + 1
+    }
+    if ($start -le 65535) { $ranges += "$start-65535" }
+    return $ranges
+}
+
+# Narrow only the automatic "Query User" block rules Windows created for this exact Node
+# executable, so they keep blocking every port except the AIoT ones.
+foreach ($protocol in @('TCP', 'UDP')) {
+    $ports = if ($protocol -eq 'TCP') { $TcpPorts } else { $UdpPorts }
+    if (!$ports) { continue }
+    $rules = @(Get-NetFirewallRule -Enabled True -Direction Inbound -Action Block | Where-Object {
+        $_.Name -like "$protocol Query User*" -and
+        (($_ | Get-NetFirewallApplicationFilter).Program -ieq $NodePath)
+    })
+    foreach ($rule in $rules) {
+        $filter = $rule | Get-NetFirewallPortFilter
+        if ($filter.Protocol -eq $protocol -and $filter.LocalPort -eq 'Any') {
+            $rule | Set-NetFirewallRule -LocalPort (Get-ComplementRanges $ports)
+            Write-Host "Excluded $protocol $($ports -join ', ') from Node block: $($rule.Name)"
+        }
     }
 }
-$name = 'AIoT-Hotspot-Node-TCP'
-$existing = Get-NetFirewallRule -Name $name -ErrorAction SilentlyContinue
-if ($existing) { $existing | Remove-NetFirewallRule }
-New-NetFirewallRule -Name $name -DisplayName 'AIoT hotspot Node TCP' -Direction Inbound -Action Allow -Enabled True -Profile Any -Program $NodePath -Protocol TCP -LocalPort $Port -LocalAddress 192.168.137.1 -RemoteAddress 192.168.137.0/24 | Out-Null
-Write-Host "Ready: Node TCP $Port allowed only from hotspot 192.168.137.0/24. Firewall remains enabled."
-Write-Host 'Start backend, then open http://192.168.137.1:3000/health from phone.'
+
+$rulesToCreate = @(
+    @{ Name = 'AIoT-Hotspot-Node-TCP'; Protocol = 'TCP'; Ports = $TcpPorts; LocalAddress = '192.168.137.1' },
+    # mDNS queries are multicast (224.0.0.251), so the local address is not restricted.
+    @{ Name = 'AIoT-Hotspot-Node-mDNS'; Protocol = 'UDP'; Ports = $UdpPorts; LocalAddress = 'Any' }
+)
+foreach ($r in $rulesToCreate) {
+    $existing = Get-NetFirewallRule -Name $r.Name -ErrorAction SilentlyContinue
+    if ($existing) { $existing | Remove-NetFirewallRule }
+    if (!$r.Ports) { continue }
+    New-NetFirewallRule -Name $r.Name -DisplayName ($r.Name -replace '-', ' ') -Direction Inbound -Action Allow -Enabled True `
+        -Profile Any -Program $NodePath -Protocol $r.Protocol -LocalPort $r.Ports -LocalAddress $r.LocalAddress `
+        -RemoteAddress 192.168.137.0/24 | Out-Null
+    Write-Host "Allowed Node $($r.Protocol) $($r.Ports -join ', ') from hotspot 192.168.137.0/24."
+}
+Write-Host 'Firewall remains enabled. Start the backend, then open http://192.168.137.1:3000/trust on the phone.'

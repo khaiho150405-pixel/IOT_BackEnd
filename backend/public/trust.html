@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#456780">
+  <title>AIoT – Cài chứng chỉ</title>
+  <style>
+    :root { font-family: "Segoe UI", Arial, sans-serif; color: #253341; background: #f3f5f7; --muted: #637282; --line: #d9e0e6; --blue: #456780; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f3f5f7; }
+    main { width: min(720px, calc(100% - 32px)); margin: auto; padding: 28px 0 40px; }
+    h1 { margin: 0 0 6px; font-size: 26px; }
+    p, li { color: #3c4b59; font-size: 14px; line-height: 1.6; }
+    .muted { color: var(--muted); font-size: 13px; }
+    .card { margin-top: 16px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+    .card h2 { margin: 0 0 8px; font-size: 16px; }
+    .button { display: inline-block; margin-top: 8px; padding: 11px 16px; border-radius: 8px; background: var(--blue); color: #fff; font-weight: 700; text-decoration: none; }
+    .urls a { display: block; margin-top: 6px; color: var(--blue); font-size: 15px; word-break: break-all; }
+    code { padding: 1px 5px; border-radius: 4px; background: #edf1f4; }
+    ol { padding-left: 20px; margin: 6px 0 0; }
+    .ok { color: #2f855a; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Kết nối an toàn tới AIoT Smart Room</h1>
+    <p class="muted">Máy chủ trong nhà dùng chứng chỉ do chính nó cấp. Cài chứng chỉ gốc (CA) <strong>một lần</strong> trên mỗi điện thoại/máy tính để mở dashboard bằng HTTPS không bị cảnh báo và cài được thành ứng dụng.</p>
+    <p id="secureNote" class="muted"></p>
+
+    <div class="card">
+      <h2>1. Tải chứng chỉ gốc</h2>
+      <a class="button" href="/ca.crt" download="aiot-smart-room-ca.crt">Tải aiot-smart-room-ca.crt</a>
+      <p class="muted">Chỉ cài chứng chỉ này nếu bạn tin máy chủ AIoT trong nhà mình. Nó chỉ dùng để xác thực máy chủ AIoT, không cho phép xem dữ liệu của bạn.</p>
+    </div>
+
+    <div class="card">
+      <h2>2. Cài đặt</h2>
+      <p><strong>Android:</strong></p>
+      <ol>
+        <li>Mở file vừa tải, hoặc vào <em>Cài đặt → Bảo mật → Mã hóa và thông tin xác thực → Cài đặt chứng chỉ → Chứng chỉ CA</em>.</li>
+        <li>Chọn <code>aiot-smart-room-ca.crt</code>, xác nhận cài đặt.</li>
+      </ol>
+      <p><strong>iPhone / iPad:</strong></p>
+      <ol>
+        <li>Mở liên kết tải bằng <strong>Safari</strong>, chọn <em>Cho phép</em> để tải hồ sơ.</li>
+        <li><em>Cài đặt → Đã tải về hồ sơ → Cài đặt</em>.</li>
+        <li><em>Cài đặt → Cài đặt chung → Giới thiệu → Cài đặt tin cậy chứng nhận</em> → bật <strong>AIoT Smart Room Local CA</strong>.</li>
+      </ol>
+      <p><strong>Windows:</strong> mở file → <em>Install Certificate</em> → <em>Current User</em> → <em>Place all certificates in the following store</em> → <em>Trusted Root Certification Authorities</em>.</p>
+    </div>
+
+    <div class="card">
+      <h2>3. Mở dashboard bằng HTTPS</h2>
+      <div class="urls" id="urls"><span class="muted">Đang tải địa chỉ…</span></div>
+      <p class="muted">Sau khi mở, trên Android chọn <em>⋮ → Cài đặt ứng dụng</em> (Chrome); trên iPhone chọn <em>Chia sẻ → Thêm vào MH chính</em> (Safari).</p>
+    </div>
+  </main>
+  <script>
+    document.getElementById('secureNote').innerHTML = window.isSecureContext && location.protocol === 'https:' ?
+      '<span class="ok">✔ Bạn đang dùng kết nối HTTPS hợp lệ.</span>' : '';
+    fetch('/api/network', { cache: 'no-store' }).then(r => r.json()).then(info => {
+      const box = document.getElementById('urls');
+      if (!info.https) { box.innerHTML = '<span class="muted">HTTPS đang tắt trên máy chủ (HTTPS_ENABLED=false).</span>'; return; }
+      const hosts = [info.mdnsName, ...info.ips].filter(Boolean);
+      box.replaceChildren(...hosts.map(host => {
+        const a = document.createElement('a');
+        a.href = `https://${host}:${info.httpsPort}/dashboard`;
+        a.textContent = a.href;
+        return a;
+      }));
+    }).catch(() => { document.getElementById('urls').textContent = 'Không lấy được địa chỉ máy chủ.'; });
+  </script>
+</body>
+</html>

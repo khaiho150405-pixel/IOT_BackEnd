@@ -10,6 +10,7 @@ import { OledRenderer } from './display';
 import { MusicLibrary } from './music';
 import { AiotMqttService } from './mqtt.service';
 import { AuthService } from '../auth/auth.service';
+import { routeUpgrade } from '../network/upgrade';
 
 interface Session {
   ws: WebSocket;
@@ -55,14 +56,26 @@ export class AiotGateway implements OnModuleDestroy {
 
   attach(server: Server) {
     this.mqtt?.setGateway(this);
-    this.server = new WebSocketServer({ server, path: '/aiot', maxPayload: 8192, perMessageDeflate: false,
+    // noServer + routeUpgrade: /aiot shares the HTTP server with the browser /api/live channel.
+    this.server = new WebSocketServer({ noServer: true, maxPayload: 8192, perMessageDeflate: false,
       verifyClient: ({ req }, done) => {
-        const accepted = this.sessions.size < 8 &&
-          authenticate(req.headers.authorization, process.env.DEVICE_TOKEN!);
-        if (!accepted) console.warn(`WebSocket rejected from ${req.socket.remoteAddress}: auth or connection limit`);
-        done(accepted, 401, 'Unauthorized');
+        const peer = req.socket.remoteAddress;
+        if (this.sessions.size >= 8) {
+          console.warn(`WebSocket rejected from ${peer}: connection limit (8 sessions)`);
+          return done(false, 503, 'Too many connections');
+        }
+        if (!authenticate(req.headers.authorization, process.env.DEVICE_TOKEN!)) {
+          // Never log the token itself; the header length is enough to spot a missing or different token.
+          const header = req.headers.authorization;
+          console.warn(`WebSocket rejected from ${peer}: wrong device token ` +
+            `(${header ? `Authorization header of ${header.length} chars` : 'no Authorization header'}; ` +
+            `WS_TOKEN in include/config.h or the token saved on the device must equal DEVICE_TOKEN)`);
+          return done(false, 401, 'Unauthorized');
+        }
+        done(true);
       },
     });
+    routeUpgrade(server, '/aiot', this.server);
     this.heartbeat = setInterval(() => {
       for (const s of this.sessions) {
         if (!s.alive) { s.ws.terminate(); continue; }

@@ -14,10 +14,37 @@ import { HistoryStore } from './aiot/history';
 import { AiotMqttService } from './aiot/mqtt.service';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createServer as createHttpsServer, Server as HttpsServer } from 'node:https';
+import { DevicesService } from './aiot/devices.service';
+import { LiveHub } from './network/live';
+import { ensureTls, TlsMaterial } from './network/tls';
+import { MdnsHandle, startMdns } from './network/mdns';
+import { MANIFEST, SERVICE_WORKER, appIcon } from './network/pwa';
 
-const PAGE_CSP = "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+const PAGE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 
-async function sendPage(response: any, file: string) {
+/** Runtime network facts shared with the routes below (filled in by main()). */
+const network: { tls?: TlsMaterial; httpsPort: number; mdnsName?: string } = { httpsPort: 3443 };
+
+function isLocalRequest(req: any) {
+  const host = String(req.hostname || req.headers?.host || '').split(':')[0].toLowerCase();
+  return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(host);
+}
+
+/**
+ * Browsers on other machines are sent to HTTPS so passwords never cross the LAN in clear
+ * text. localhost stays on HTTP (already private), and so do /trust and /ca.crt, which
+ * phones need before they trust the certificate. HTTPS_REDIRECT=false disables this.
+ */
+function redirectToHttps(req: any, response: any): boolean {
+  if (!network.tls || req.socket?.encrypted || isLocalRequest(req) || process.env.HTTPS_REDIRECT === 'false') return false;
+  const host = String(req.hostname || req.headers?.host || '').split(':')[0];
+  response.redirect(302, `https://${host}:${network.httpsPort}${req.originalUrl || req.url}`);
+  return true;
+}
+
+async function sendPage(response: any, file: string, req?: any) {
+  if (req && redirectToHttps(req, response)) return;
   const html = await readFile(join(process.cwd(), 'public', file), 'utf8');
   response.setHeader('Content-Security-Policy', PAGE_CSP);
   response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -36,7 +63,8 @@ function deviceError(error: unknown, busyMessage: string): never {
 @Controller()
 class HealthController {
   constructor(@Inject(AiotGateway) private readonly gateway: AiotGateway,
-    @Inject(AuthService) private readonly auth: AuthService) {}
+    @Inject(AuthService) private readonly auth: AuthService,
+    @Inject(DevicesService) private readonly devicesView: DevicesService) {}
 
   @Get('health') health() {
     return {
@@ -50,8 +78,48 @@ class HealthController {
   }
 
   // Pages are public; every API they call requires a signed-in account.
-  @Get('dashboard') dashboard(@Res() response: any) { return sendPage(response, 'dashboard.html'); }
-  @Get('mobile') mobile(@Res() response: any) { return sendPage(response, 'mobile.html'); }
+  @Get() root(@Req() req: any, @Res() response: any) {
+    if (!redirectToHttps(req, response)) response.redirect(302, '/dashboard');
+  }
+  @Get('dashboard') dashboard(@Req() req: any, @Res() response: any) { return sendPage(response, 'dashboard.html', req); }
+  @Get('mobile') mobile(@Req() req: any, @Res() response: any) { return sendPage(response, 'mobile.html', req); }
+  /** Certificate install guide; stays reachable over plain HTTP on purpose. */
+  @Get('trust') trust(@Res() response: any) { return sendPage(response, 'trust.html'); }
+
+  @Get('ca.crt')
+  caCertificate(@Res() response: any) {
+    if (!network.tls) throw new NotFoundException('HTTPS đang tắt.');
+    response.setHeader('Content-Type', 'application/x-x509-ca-cert');
+    response.setHeader('Content-Disposition', 'attachment; filename="aiot-smart-room-ca.crt"');
+    response.send(network.tls.caCert);
+  }
+
+  /** Addresses for the /trust page (this server's own LAN names, nothing about users). */
+  @Get('api/network')
+  networkInfo() {
+    return { https: !!network.tls, httpsPort: network.httpsPort, mdnsName: network.mdnsName ?? null,
+      ips: network.tls?.ips.filter(ip => ip !== '127.0.0.1') ?? [] };
+  }
+
+  @Get('manifest.webmanifest')
+  manifest(@Res() response: any) {
+    response.type('application/manifest+json').send(JSON.stringify(MANIFEST));
+  }
+
+  @Get('sw.js')
+  serviceWorker(@Res() response: any) {
+    response.setHeader('Cache-Control', 'no-cache');
+    response.type('application/javascript').send(SERVICE_WORKER);
+  }
+
+  @Get('icons/:file')
+  icon(@Param('file') file: string, @Res() response: any) {
+    const match = /^(icon|maskable|apple-touch)-(\d+)\.png$/.exec(file);
+    const size = match ? Number(match[2]) : 0;
+    if (!match || ![180, 192, 512].includes(size)) throw new NotFoundException();
+    response.setHeader('Cache-Control', 'public, max-age=86400');
+    response.type('png').send(appIcon(size, match[1] === 'maskable'));
+  }
 
   @Get('api/mobile/info')
   @Require('authenticated')
@@ -71,7 +139,7 @@ class HealthController {
           deviceChat: 'aiot/device/<MAC>/chat',
         },
       },
-      devices: await this.visibleDevices(currentUser(req)),
+      devices: await this.devicesView.visibleDevices(currentUser(req)),
     };
   }
 
@@ -79,17 +147,7 @@ class HealthController {
   @Get(['api/devices', 'api/dashboard/devices', 'api/mobile/devices'])
   @Require('authenticated')
   async devices(@Req() req: any) {
-    return { devices: await this.visibleDevices(currentUser(req)) };
-  }
-
-  private async visibleDevices(user: AuthUser) {
-    const [access, known] = await Promise.all([this.auth.deviceAccess(user), this.auth.listDevices()]);
-    const live = new Map(this.gateway.dashboardDevices().map(d => [d.id, d]));
-    return known.filter(d => access.has(d.id)).map(d => ({
-      ...(live.get(d.id) ?? { id: d.id, connected: false, busy: false, ledEnabled: undefined, sensor: null }),
-      name: d.name, roomId: d.roomId, lastSeenAt: d.lastSeenAt,
-      canControl: access.get(d.id)!.control, canChat: access.get(d.id)!.chat,
-    }));
+    return { devices: await this.devicesView.visibleDevices(currentUser(req)) };
   }
 
   @Post(['api/devices/:deviceId/led', 'api/dashboard/devices/:deviceId/led', 'api/mobile/devices/:deviceId/led'])
@@ -127,7 +185,7 @@ class HealthController {
 @Module({
   controllers: [HealthController, AuthController],
   providers: [AuthService, { provide: APP_GUARD, useClass: AuthGuard },
-    AiotGateway, AiotService, HistoryStore, AiotMqttService],
+    AiotGateway, AiotService, HistoryStore, AiotMqttService, DevicesService, LiveHub],
 })
 class AppModule {}
 
@@ -148,9 +206,31 @@ async function main() {
   app.enableShutdownHooks();
   await app.init();
   app.get(AiotGateway).attach(app.getHttpServer());
+  app.get(LiveHub).attach(app.getHttpServer());
   const port = Number(process.env.PORT || 3000);
   const host = process.env.HOST || '0.0.0.0';
   await app.listen(port, host);
   console.log(`[AIoT] Server is listening at http://${host}:${port}`);
+
+  // Local HTTPS for browsers/phones (the ESP32 keeps using plain ws:// on PORT).
+  let httpsServer: HttpsServer | undefined;
+  let mdns: MdnsHandle | undefined;
+  const mdnsLabel = (process.env.MDNS_NAME || 'aiot').trim();
+  if (process.env.HTTPS_ENABLED !== 'false') {
+    network.httpsPort = Number(process.env.HTTPS_PORT || 3443);
+    network.tls = ensureTls(process.env.TLS_DIR || join(process.cwd(), 'data', 'tls'), mdnsLabel);
+    httpsServer = createHttpsServer({ key: network.tls.key, cert: network.tls.cert }, app.getHttpAdapter().getInstance());
+    app.get(LiveHub).attach(httpsServer);
+    await new Promise<void>((resolve, reject) => {
+      httpsServer!.once('error', reject);
+      httpsServer!.listen(network.httpsPort, host, () => resolve());
+    });
+    console.log(`[AIoT] HTTPS for browsers at https://${mdnsLabel}.local:${network.httpsPort} (install the CA from /trust)`);
+  }
+  if (process.env.MDNS_ENABLED !== 'false') {
+    mdns = startMdns(mdnsLabel);
+    if (mdns) network.mdnsName = mdns.name;
+  }
+  app.getHttpServer().once('close', () => { httpsServer?.close(); mdns?.stop(); });
 }
 main().catch(error => { console.error(error?.stack || error?.message || error); process.exitCode = 1; });

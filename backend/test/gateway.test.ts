@@ -242,7 +242,8 @@ test('actual NestJS bootstrap exposes health and authenticates WS without callin
     env: { ...process.env, GEMINI_API_KEY: 'test-only-not-a-real-key', DEVICE_TOKEN: token,
       AI_PROVIDER: 'gemini', HOST: '127.0.0.1', PORT: String(port), DATABASE_URL: '', FONT_DIR: '',
       DEMO_FAST_CONFIRMATIONS: 'false', AUTH_DB_FILE: ':memory:', AUTH_JWT_SECRET: '',
-      OWNER_USERNAME: 'owner', OWNER_PASSWORD: 'owner-pass-123', MQTT_ENABLED: 'false' },
+      OWNER_USERNAME: 'owner', OWNER_PASSWORD: 'owner-pass-123', MQTT_ENABLED: 'false',
+      HTTPS_ENABLED: 'false', MDNS_ENABLED: 'false' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';

@@ -5,7 +5,7 @@ Cài đặt máy mới: xem [README.md](README.md), mục 1. Hệ thống gồm 
 | Thành phần | Vai trò | Cổng |
 | --- | --- | --- |
 | Ollama + `qwen2.5:3b` | Hiểu câu nói, phân loại ý định | 11434 (chỉ máy này) |
-| Backend NestJS | WebSocket cho ESP32, dashboard, MQTT | 3000, 1883 |
+| Backend NestJS | WebSocket cho ESP32, dashboard, MQTT, HTTPS cho điện thoại, mDNS `aiot.local` | 3000, 3443, 1883, UDP 5353 |
 | Voice bridge (Python, backend tự bật) | PhoWhisper nhận dạng giọng nói, Edge TTS / giọng Windows "An" đọc câu trả lời | 8010 (chỉ máy này) |
 | ESP32-S3 | Micro, loa, OLED, LED, DHT22 | kết nối tới `ws://<IP laptop>:3000/aiot` |
 
@@ -71,6 +71,7 @@ Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*dist/src/m
 | `A local voice bridge is already running` | Bridge cũ còn ở cổng 8010: dùng lệnh dừng ở trên. |
 | `Whisper model directory is incomplete` | Chưa tạo model PhoWhisper: chạy `py -3.12 scripts\setup-phowhisper.py` (xem README, bước 6) và kiểm tra `LOCAL_WHISPER_MODEL` trong `backend/.env`; tạm thời có thể đặt `LOCAL_WHISPER_MODEL=small`. |
 | ESP32 không kết nối | Laptop và ESP32 phải cùng mạng 2.4 GHz; `WS_HOST` trong `include/config.h` (hoặc trang cấu hình Wi‑Fi `AIoT_Smart_Room`) phải là IP laptop; cho phép Node qua Windows Firewall (`scripts\fix-hotspot-firewall.ps1`, chạy bằng quyền Admin khi dùng hotspot). |
+| `WebSocket rejected ... wrong device token` | Token ESP32 gửi khác `DEVICE_TOKEN` trong `backend/.env`. Token nhập ở trang cấu hình Wi‑Fi `AIoT_Smart_Room` được lưu trên ESP32 và **ưu tiên hơn** `WS_TOKEN` trong `include/config.h`: vào lại trang đó nhập đúng token, hoặc đặt `DEVICE_TOKEN` bằng token đã lưu trên thiết bị. |
 | ESP32 ngắt kết nối khi loa phát | Thường do nguồn yếu: dùng củ sạc 5 V ≥ 2 A. |
 | Giọng đọc chậm | Edge TTS đang lỗi; hệ thống chờ tối đa 3 giây rồi dùng giọng offline "An" trong 5 phút. Chỉnh bằng `EDGE_TTS_BUDGET_S` / `EDGE_TTS_COOLDOWN_S` trong `backend/.env`. |
 | ESP32 tự khởi động lại khi đang nói | Log `Device ... rebooted`: nguồn yếu; tạm giảm `SPEAKER_VOLUME` (mặc định 0.5) xuống 0.3. |

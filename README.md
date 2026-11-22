@@ -9,7 +9,7 @@ ESP32-S3 ──WebSocket (PCM 16 kHz)──▶ Backend NestJS (cổng 3000)
                                       │    ├─ Nhận biết + nhận dạng tiếng Anh: Whisper base
                                       │    └─ Giọng đọc: Edge TTS (Internet) → giọng Windows "Microsoft An" (offline) khi Edge lỗi
                                       ├─ Ollama + Qwen 2.5 3B (127.0.0.1:11434): hiểu câu nói, phân loại ý định, trò chuyện
-                                      ├─ Dashboard /dashboard, Web Mobile /mobile
+                                      ├─ Dashboard /dashboard (PWA, HTTPS :3443, aiot.local), Web Mobile /mobile
                                       └─ MQTT broker nhúng (cổng 1883)
 ```
 
@@ -30,8 +30,10 @@ Mỗi lượt hội thoại: nói một câu, dừng ~1 giây; hệ thống nh�
 | `backend/requirements-model-convert.txt` | Gói Python chỉ dùng một lần để tạo model PhoWhisper |
 | `scripts/setup-phowhisper.py` | Tải và chuyển đổi PhoWhisper-base → `models/phowhisper-base-ct2` |
 | `scripts/start-local-xiaozhi.ps1` | Kiểm tra cấu hình, bật Ollama và chạy backend bằng một lệnh |
-| `scripts/fix-hotspot-firewall.ps1` | Mở cổng 3000 cho ESP32 khi dùng Mobile Hotspot của Windows |
+| `scripts/fix-hotspot-firewall.ps1` | Mở TCP 3000, 3443 và UDP 5353 cho thiết bị trên Mobile Hotspot của Windows |
 | `models/` | Model đã chuyển đổi (tạo ra trên máy, không commit) |
+| `backend/data/` | Tài khoản (SQLite), khóa ký token, CA và chứng chỉ HTTPS (không commit, cần sao lưu) |
+| `backend/src/auth/`, `backend/src/network/` | Tài khoản và phân quyền; HTTPS nội bộ, mDNS, kênh live, PWA |
 
 ## 1. Cài đặt máy AI worker (Windows 10/11, làm một lần)
 
@@ -178,7 +180,26 @@ Cấp nguồn ESP32: log hiện `Device hello accepted: <MAC>`, OLED hiện `Lis
 | Nói "Bật đèn lên" | log `[Qwen] ... intent=led_on`, LED bật, ESP32 nói "Em đã bật đèn, đại ca." |
 | Nói "Một cộng một bằng mấy" | ESP32 trả lời "1 cộng 1 bằng 2" |
 
-Trên điện thoại cùng mạng: `http://<IP máy AI worker>:3000/mobile` (hoặc `/dashboard`), đăng nhập bằng tài khoản được cấp.
+Trên điện thoại cùng mạng: xem mục **Dùng trên điện thoại** bên dưới.
+
+## Dùng trên điện thoại (HTTPS, aiot.local, cài thành ứng dụng)
+
+Backend chạy song song hai cổng:
+
+| Cổng | Dùng cho |
+| --- | --- |
+| `3000` HTTP | ESP32 (`ws://…/aiot`), trang `/trust`, tải `/ca.crt`, truy cập ngay trên laptop (`localhost`) |
+| `3443` HTTPS | Trình duyệt trên điện thoại/máy khác: `https://aiot.local:3443/dashboard` |
+
+1. **Cài chứng chỉ (mỗi điện thoại một lần):** điện thoại vào cùng Wi-Fi, mở `http://<IP laptop>:3000/trust` → tải `aiot-smart-room-ca.crt` → làm theo hướng dẫn trên trang (Android: *Cài đặt chứng chỉ CA*; iPhone: cài hồ sơ rồi bật *Cài đặt tin cậy chứng nhận*). Backend tự tạo CA riêng trong `backend/data/tls` lần chạy đầu; chứng chỉ máy chủ tự cấp lại khi IP laptop đổi, **CA không đổi nên không phải cài lại**.
+2. **Mở dashboard:** `https://aiot.local:3443/dashboard` (hoặc `https://<IP laptop>:3443/dashboard`). Mở bằng HTTP từ máy khác sẽ tự chuyển sang HTTPS; nếu chưa cài CA, trang hiện dải cảnh báo kèm link `/trust`.
+3. **Cài thành ứng dụng:** Android (Chrome) bấm nút **⬇ Cài ứng dụng** trên dashboard hoặc *⋮ → Cài đặt ứng dụng*; iPhone (Safari) *Chia sẻ → Thêm vào MH chính*. Ứng dụng mở thẳng dashboard, toàn màn hình, có biểu tượng riêng; khung giao diện được lưu để mở nhanh, dữ liệu luôn lấy trực tiếp.
+4. **Cập nhật tức thì:** dashboard nhận trạng thái thiết bị qua WebSocket `/api/live` (chấm xanh cạnh giờ cập nhật, trễ ≤ 0,5 s); mất kết nối thì tự kết nối lại và tạm hỏi định kỳ 2 giây.
+
+Ghi chú:
+- Tên `aiot.local` dùng mDNS: iPhone, macOS, Windows 10+ và phần lớn Android 12+ phân giải được; nếu không, dùng IP laptop. Đổi tên bằng `MDNS_NAME`.
+- Windows Firewall: cho phép Node.js trên mạng **Private** khi được hỏi; với Mobile Hotspot chạy `scripts\fix-hotspot-firewall.ps1` (Admin) để mở TCP 3000, 3443 và UDP 5353 chỉ cho dải hotspot.
+- Đây là HTTPS **trong mạng nội bộ**. Truy cập từ ngoài nhà là giai đoạn 3.
 
 ## Tài khoản và phân quyền
 
@@ -211,7 +232,7 @@ API chính (gửi `Authorization: Bearer <accessToken>`; app di động gửi th
 | `PATCH /api/devices/:id`, `POST/DELETE /api/rooms` | chủ nhà/quản trị |
 | `GET /api/audit` | đã đăng nhập (người thường chỉ thấy của mình) |
 
-Lưu ý: hiện kết nối vẫn là HTTP thường trong mạng nội bộ. Trước khi mở ra Internet cần HTTPS/WSS (giai đoạn 3 của lộ trình).
+Trình duyệt trên máy khác dùng HTTPS nội bộ (cổng 3443, xem mục Dùng trên điện thoại). Trước khi mở ra Internet cần thêm giai đoạn 3 (đường hầm bảo mật, tên miền).
 
 ## 3. Firmware ESP32-S3
 
