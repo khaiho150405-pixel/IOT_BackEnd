@@ -21,7 +21,7 @@ function sendUtterance(ws: WebSocket) {
   const voice = Buffer.alloc(640);
   for (let i = 0; i < 320; i++) voice.writeInt16LE(i % 2 ? 2000 : -2000, i * 2);
   for (let i = 0; i < 12; i++) ws.send(voice);
-  for (let i = 0; i < 46; i++) ws.send(Buffer.alloc(640));
+  for (let i = 0; i < 66; i++) ws.send(Buffer.alloc(640)); // > VAD_SILENCE_MS (1200 ms) of silence
 }
 
 test('WebSocket integrates microphone → AI → ack → OLED → PCM, interrupts, and recovers from TTS errors', async t => {
@@ -211,7 +211,7 @@ test('successive LED on/off and sensor turns execute, speak, wait for playback d
     const voice = Buffer.alloc(640);
     for (let i = 0; i < 320; i++) voice.writeInt16LE(i % 2 ? 2000 : -2000, i * 2);
     // The production VAD waits for 850 ms of silence so it does not clip sentence endings.
-    for (let i = 0; i < 56; i++) { ws.send(i < 12 ? voice : Buffer.alloc(640)); await sleep(20); }
+    for (let i = 0; i < 76; i++) { ws.send(i < 12 ? voice : Buffer.alloc(640)); await sleep(20); }
     await until(() => messages.some(m => m.type === 'audio_end'));
     assert.equal(messages.some(m => m.state === 'listening'), false, 'stay muted until actual playback done');
     const end = messages.find(m => m.type === 'audio_end');

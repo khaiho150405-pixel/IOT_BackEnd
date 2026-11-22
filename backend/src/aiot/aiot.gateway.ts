@@ -74,7 +74,7 @@ export class AiotGateway implements OnModuleDestroy {
       const session: Session = {
         ws, connectedAt: Date.now(), highPass: new HighPassFilter(Number(process.env.MIC_HIGHPASS_HZ || 120)),
         detector: new UtteranceDetector(Number(process.env.VAD_RMS || 500),
-          Number(process.env.VAD_SILENCE_MS || 850), Number(process.env.VAD_MAX_MS || 12000)),
+          Number(process.env.VAD_SILENCE_MS || 1200), Number(process.env.VAD_MAX_MS || 12000)),
         busy: false, lastTurn: 0, rateStart: Date.now(), rateBytes: 0, textCount: 0, alive: true,
         readyTimer: setTimeout(() => ws.close(1008, 'hello required'), 10000),
       };

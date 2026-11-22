@@ -382,7 +382,8 @@ TRẢ VỀ ĐỊNH DẠNG JSON THUẦN TÚY:
     const rightWords = words.slice(opIndex + 1);
     // Require a question ending ("bằng ...", "(còn) mấy", "bao nhiêu") so chat that
     // merely contains numbers is left to Qwen.
-    const end = rightWords.findIndex(w => w === 'bang' || w === 'may' || w === 'bao');
+    // "bằng" is also heard as "bàn" (end-to-end test with a natural female voice).
+    const end = rightWords.findIndex(w => w === 'bang' || w === 'ban' || w === 'may' || w === 'bao');
     if (end < 1) return undefined;
     const right = this.vietnameseNumber(rightWords.slice(0, end));
     if (left === undefined || right === undefined) return undefined;

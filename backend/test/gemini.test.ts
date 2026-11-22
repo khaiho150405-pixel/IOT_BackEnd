@@ -284,6 +284,7 @@ test('spoken arithmetic is answered exactly, including misheard operator words',
   assert.equal(await ask('một trăm linh ba trừ ba bằng mấy'), 'Dạ, 103 trừ 3 bằng 100 đại ca ạ.');
   assert.equal(await ask('7 chia 2 bằng mấy'), 'Dạ, 7 chia 2 bằng 3,5 đại ca ạ.');
   assert.equal(await ask('mười chừ ba còn mấy'), 'Dạ, 10 trừ 3 bằng 7 đại ca ạ.');
+  assert.equal(await ask('ba cộng bốn bàn mấy.'), 'Dạ, 3 cộng 4 bằng 7 đại ca ạ.');
   assert.equal(qwen.calls, 0, 'arithmetic never depends on the language model');
   // Ordinary sentences that merely contain number words still go to Qwen.
   await ask('hôm nay anh làm ba bài tập');
