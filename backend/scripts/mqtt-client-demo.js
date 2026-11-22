@@ -5,6 +5,11 @@
  *   node scripts/mqtt-client-demo.js on                      (Bật đèn LED)
  *   node scripts/mqtt-client-demo.js off                     (Tắt đèn LED)
  *   node scripts/mqtt-client-demo.js ask "Nhiệt độ bao nhiêu?" (Hỏi AI)
+ *
+ * The embedded broker requires an account (same as the web dashboard):
+ *   PowerShell: $env:MQTT_USER='ten_dang_nhap'; $env:MQTT_PASS='mat_khau'; node scripts/mqtt-client-demo.js on
+ * The aggregate topics used here (aiot/sensor, aiot/led/set, ...) need an owner/admin account;
+ * members use aiot/device/<MAC>/... topics of the devices they were granted.
  */
 
 const mqtt = require('mqtt');
@@ -18,6 +23,13 @@ const client = mqtt.connect(url, {
   clientId: `demo_client_${Math.random().toString(16).slice(2, 6)}`,
   clean: true,
   connectTimeout: 5000,
+  reconnectPeriod: 0,
+  username: process.env.MQTT_USER,
+  password: process.env.MQTT_PASS,
+});
+client.on('error', err => {
+  console.error(`[MQTT Demo] Lỗi: ${err.message}. Đặt MQTT_USER / MQTT_PASS bằng tài khoản hợp lệ.`);
+  process.exit(1);
 });
 
 const argCmd = process.argv[2] ? process.argv[2].toLowerCase() : 'monitor';

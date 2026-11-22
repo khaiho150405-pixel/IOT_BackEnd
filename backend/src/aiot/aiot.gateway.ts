@@ -9,6 +9,7 @@ import { applySpeakerVolume, HighPassFilter, UtteranceDetector } from './audio';
 import { OledRenderer } from './display';
 import { MusicLibrary } from './music';
 import { AiotMqttService } from './mqtt.service';
+import { AuthService } from '../auth/auth.service';
 
 interface Session {
   ws: WebSocket;
@@ -49,6 +50,7 @@ export class AiotGateway implements OnModuleDestroy {
     @Inject(AiotService) private ai: AiotService,
     @Inject(HistoryStore) private history: HistoryStore,
     @Optional() @Inject(AiotMqttService) private mqtt?: AiotMqttService,
+    @Optional() @Inject(AuthService) private auth?: AuthService,
   ) {}
 
   attach(server: Server) {
@@ -157,6 +159,8 @@ export class AiotGateway implements OnModuleDestroy {
       s.ledEnabled = typeof message.led_enabled === 'boolean' ? message.led_enabled : undefined;
       clearTimeout(s.readyTimer);
       console.log(`Device hello accepted: ${s.id}`);
+      // Register new devices so owners/admins can name them and grant access.
+      void this.auth?.touchDevice(s.id!).catch(error => console.warn(`Device registry failed: ${(error as Error).message}`));
       this.send(s, { type: 'status', state: 'listening' });
       this.show(s, 'Dạ em chào đại ca!\nEm sẵn sàng rồi ạ.');
       this.mqtt?.publishState(s.id!, { connected: true, ledEnabled: s.ledEnabled, busy: false });
@@ -391,6 +395,9 @@ export class AiotGateway implements OnModuleDestroy {
       let music: Buffer | undefined;
       if (decision.intent === 'led_on' || decision.intent === 'led_off') {
         await this.command(s, decision.intent === 'led_on' ? 'on' : 'off', signal);
+        // Spoken commands come from someone in the room; they are logged but not account-bound.
+        if (Buffer.isBuffer(input)) void this.auth?.audit({ username: 'voice', source: 'voice',
+          action: decision.intent === 'led_on' ? 'led:on' : 'led:off', deviceId: s.id, detail: decision.transcript });
       } else if (decision.intent === 'music_play') music = await this.wait(this.music.read(decision.trackId), signal);
       else if (decision.intent === 'music_stop') this.send(s, { type: 'audio_stop' });
       signal.throwIfAborted();

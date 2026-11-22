@@ -1,10 +1,13 @@
 import 'reflect-metadata';
 import 'dotenv/config';
 import {
-  BadGatewayException, BadRequestException, ConflictException, Controller, ForbiddenException,
+  BadGatewayException, BadRequestException, ConflictException, Controller,
   Get, Inject, Module, NotFoundException, Param, Post, Body, Req, Res,
 } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
+import { APP_GUARD, NestFactory } from '@nestjs/core';
+import { AuthController } from './auth/auth.controller';
+import { AuthGuard, Require, clientIp, clientSource, currentUser } from './auth/auth.guard';
+import { AuthService, AuthUser } from './auth/auth.service';
 import { AiotGateway } from './aiot/aiot.gateway';
 import { AiotService } from './aiot/aiot.service';
 import { HistoryStore } from './aiot/history';
@@ -12,36 +15,28 @@ import { AiotMqttService } from './aiot/mqtt.service';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-function allowLocalDashboard(req: any) {
-  const address = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
-  if (address !== '127.0.0.1' && address !== '::1') throw new ForbiddenException('Dashboard API chỉ dùng trên máy chạy backend.');
-  const origin = req.headers.origin;
-  if (origin) {
-    try {
-      const parsed = new URL(origin);
-      const localOrigin = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
-      if (!localOrigin || parsed.host.toLowerCase() !== String(req.headers.host || '').toLowerCase())
-        throw new ForbiddenException('Yêu cầu dashboard không cùng nguồn.');
-    } catch (error) {
-      if (error instanceof ForbiddenException) throw error;
-      throw new ForbiddenException('Origin không hợp lệ.');
-    }
-  }
+const PAGE_CSP = "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+
+async function sendPage(response: any, file: string) {
+  const html = await readFile(join(process.cwd(), 'public', file), 'utf8');
+  response.setHeader('Content-Security-Policy', PAGE_CSP);
+  response.setHeader('X-Content-Type-Options', 'nosniff');
+  response.setHeader('Referrer-Policy', 'no-referrer');
+  response.type('html').send(html);
 }
 
-function verifyAdminPin(req: any, body?: any) {
-  const expectedPin = (process.env.ADMIN_PIN || '1504').trim();
-  const authHeader = req.headers['authorization'] || '';
-  const bearerToken = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
-  const supplied = req.headers['x-admin-pin'] || bearerToken || body?.pin;
-  if (!supplied || String(supplied).trim() !== expectedPin) {
-    throw new ForbiddenException('Chế độ chỉ xem. Bạn cần nhập mã PIN quản trị viên để điều khiển.');
-  }
+function deviceError(error: unknown, busyMessage: string): never {
+  const message = (error as Error).message;
+  if (message === 'DEVICE_OFFLINE') throw new NotFoundException('ESP32 đang offline.');
+  if (message === 'DEVICE_BUSY') throw new ConflictException(busyMessage);
+  if (message === 'TURN_FAILED') throw new BadGatewayException('AI chưa xử lý được câu này. Kiểm tra backend/API rồi thử lại.');
+  throw error;
 }
 
 @Controller()
 class HealthController {
-  constructor(@Inject(AiotGateway) private readonly gateway: AiotGateway) {}
+  constructor(@Inject(AiotGateway) private readonly gateway: AiotGateway,
+    @Inject(AuthService) private readonly auth: AuthService) {}
 
   @Get('health') health() {
     return {
@@ -54,127 +49,86 @@ class HealthController {
     };
   }
 
-  @Get('dashboard')
-  async dashboard(@Res() response: any) {
-    const html = await readFile(join(process.cwd(), 'public', 'dashboard.html'), 'utf8');
-    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
-    response.setHeader('X-Content-Type-Options', 'nosniff');
-    response.setHeader('Referrer-Policy', 'no-referrer');
-    response.type('html').send(html);
-  }
-
-  @Get('mobile')
-  async mobile(@Res() response: any) {
-    const html = await readFile(join(process.cwd(), 'public', 'mobile.html'), 'utf8');
-    response.setHeader('X-Content-Type-Options', 'nosniff');
-    response.type('html').send(html);
-  }
-
-  @Post('api/mobile/auth')
-  mobileAuth(@Body() body: any) {
-    const expectedPin = (process.env.ADMIN_PIN || '1504').trim();
-    if (!body?.pin || String(body.pin).trim() !== expectedPin) {
-      throw new ForbiddenException('Mã PIN quản trị không chính xác.');
-    }
-    return {
-      success: true,
-      role: 'admin',
-      message: 'Xác thực quyền quản trị thành công! Em chào đại ca.',
-    };
-  }
+  // Pages are public; every API they call requires a signed-in account.
+  @Get('dashboard') dashboard(@Res() response: any) { return sendPage(response, 'dashboard.html'); }
+  @Get('mobile') mobile(@Res() response: any) { return sendPage(response, 'mobile.html'); }
 
   @Get('api/mobile/info')
-  mobileInfo(@Req() req: any) {
+  @Require('authenticated')
+  async mobileInfo(@Req() req: any) {
     const host = req.headers.host ? req.headers.host.split(':')[0] : '127.0.0.1';
     return {
-      auth: {
-        requiresPin: true,
-      },
+      user: currentUser(req),
       broker: {
         host,
         port: Number(process.env.MQTT_PORT || 1883),
+        // MQTT clients sign in with the same username/password and only see their devices.
         topics: {
-          command: 'aiot/command',
           deviceCommand: 'aiot/device/<MAC>/command',
-          sensor: 'aiot/sensor',
-          state: 'aiot/state',
-          chat: 'aiot/chat',
-          ledSet: 'aiot/led/set',
-          ledStatus: 'aiot/led/status',
+          deviceLedSet: 'aiot/device/<MAC>/led/set',
+          deviceSensor: 'aiot/device/<MAC>/sensor',
+          deviceState: 'aiot/device/<MAC>/state',
+          deviceChat: 'aiot/device/<MAC>/chat',
         },
       },
-      devices: this.gateway.dashboardDevices(),
+      devices: await this.visibleDevices(currentUser(req)),
     };
   }
 
-  @Get('api/mobile/devices')
-  mobileDevices() {
-    return { devices: this.gateway.dashboardDevices() };
+  /** Live devices the user may see, with names/rooms and what the user may do on each. */
+  @Get(['api/devices', 'api/dashboard/devices', 'api/mobile/devices'])
+  @Require('authenticated')
+  async devices(@Req() req: any) {
+    return { devices: await this.visibleDevices(currentUser(req)) };
   }
 
-  @Post('api/mobile/devices/:deviceId/led')
-  async mobileSetLed(@Req() req: any, @Param('deviceId') deviceId: string, @Body() body: any) {
-    verifyAdminPin(req, body);
-    if (typeof body?.enabled !== 'boolean') throw new BadRequestException('enabled phải là true hoặc false.');
-    try {
-      return await this.gateway.setDashboardLed(deviceId, body.enabled);
-    } catch (error) {
-      if ((error as Error).message === 'DEVICE_OFFLINE') throw new NotFoundException('ESP32 đang offline.');
-      if ((error as Error).message === 'DEVICE_BUSY') throw new ConflictException('ESP32 đang xử lý lượt giọng nói.');
-      throw error;
-    }
+  private async visibleDevices(user: AuthUser) {
+    const [access, known] = await Promise.all([this.auth.deviceAccess(user), this.auth.listDevices()]);
+    const live = new Map(this.gateway.dashboardDevices().map(d => [d.id, d]));
+    return known.filter(d => access.has(d.id)).map(d => ({
+      ...(live.get(d.id) ?? { id: d.id, connected: false, busy: false, ledEnabled: undefined, sensor: null }),
+      name: d.name, roomId: d.roomId, lastSeenAt: d.lastSeenAt,
+      canControl: access.get(d.id)!.control, canChat: access.get(d.id)!.chat,
+    }));
   }
 
-  @Post('api/mobile/devices/:deviceId/text')
-  async mobileSubmitText(@Req() req: any, @Param('deviceId') deviceId: string, @Body() body: any) {
-    verifyAdminPin(req, body);
-    if (typeof body?.text !== 'string' || !body.text.trim() || [...body.text].length > 400)
-      throw new BadRequestException('Nhập câu dài tối đa 400 ký tự.');
-    try {
-      return await this.gateway.submitDashboardText(deviceId, body.text);
-    } catch (error) {
-      if ((error as Error).message === 'DEVICE_OFFLINE') throw new NotFoundException('ESP32 đang offline.');
-      if ((error as Error).message === 'DEVICE_BUSY') throw new ConflictException('ESP32 đang xử lý lượt khác.');
-      if ((error as Error).message === 'TURN_FAILED') throw new BadGatewayException('AI chưa xử lý được câu này.');
-      throw error;
-    }
-  }
-
-  @Get('api/dashboard/devices')
-  devices(@Req() req: any) {
-    allowLocalDashboard(req);
-    return { devices: this.gateway.dashboardDevices() };
-  }
-
-  @Post('api/dashboard/devices/:deviceId/led')
+  @Post(['api/devices/:deviceId/led', 'api/dashboard/devices/:deviceId/led', 'api/mobile/devices/:deviceId/led'])
+  @Require('device:control', 'deviceId')
   async setLed(@Req() req: any, @Param('deviceId') deviceId: string, @Body() body: any) {
-    allowLocalDashboard(req);
     if (typeof body?.enabled !== 'boolean') throw new BadRequestException('enabled phải là true hoặc false.');
+    const entry = { user: currentUser(req), source: clientSource(req), action: body.enabled ? 'led:on' : 'led:off',
+      deviceId, ip: clientIp(req) } as const;
     try {
-      return await this.gateway.setDashboardLed(deviceId, body.enabled);
+      const result = await this.gateway.setDashboardLed(deviceId, body.enabled);
+      void this.auth.audit(entry);
+      return result;
     } catch (error) {
-      if ((error as Error).message === 'DEVICE_OFFLINE') throw new NotFoundException('ESP32 đang offline.');
-      if ((error as Error).message === 'DEVICE_BUSY') throw new ConflictException('ESP32 đang xử lý lượt giọng nói.');
-      throw error;
+      void this.auth.audit({ ...entry, result: 'error', detail: (error as Error).message });
+      deviceError(error, 'ESP32 đang xử lý lượt giọng nói.');
     }
   }
 
-  @Post('api/dashboard/devices/:deviceId/text')
+  @Post(['api/devices/:deviceId/text', 'api/dashboard/devices/:deviceId/text', 'api/mobile/devices/:deviceId/text'])
+  @Require('device:chat', 'deviceId')
   async submitText(@Req() req: any, @Param('deviceId') deviceId: string, @Body() body: any) {
-    allowLocalDashboard(req);
     if (typeof body?.text !== 'string' || !body.text.trim() || [...body.text].length > 400)
       throw new BadRequestException('Nhập câu dài tối đa 400 ký tự.');
+    const entry = { user: currentUser(req), source: clientSource(req), action: 'chat', deviceId, ip: clientIp(req) } as const;
     try {
-      return await this.gateway.submitDashboardText(deviceId, body.text);
+      const result = await this.gateway.submitDashboardText(deviceId, body.text);
+      void this.auth.audit({ ...entry, detail: `${body.text.slice(0, 200)} -> ${result.intent}` });
+      return result;
     } catch (error) {
-      if ((error as Error).message === 'DEVICE_OFFLINE') throw new NotFoundException('ESP32 đang offline.');
-      if ((error as Error).message === 'DEVICE_BUSY') throw new ConflictException('ESP32 đang xử lý lượt khác.');
-      if ((error as Error).message === 'TURN_FAILED') throw new BadGatewayException('AI chưa xử lý được câu này. Kiểm tra backend/API rồi thử lại.');
-      throw error;
+      void this.auth.audit({ ...entry, result: 'error', detail: (error as Error).message });
+      deviceError(error, 'ESP32 đang xử lý lượt khác.');
     }
   }
 }
-@Module({ controllers: [HealthController], providers: [AiotGateway, AiotService, HistoryStore, AiotMqttService] })
+@Module({
+  controllers: [HealthController, AuthController],
+  providers: [AuthService, { provide: APP_GUARD, useClass: AuthGuard },
+    AiotGateway, AiotService, HistoryStore, AiotMqttService],
+})
 class AppModule {}
 
 async function main() {
@@ -199,4 +153,4 @@ async function main() {
   await app.listen(port, host);
   console.log(`[AIoT] Server is listening at http://${host}:${port}`);
 }
-main().catch(error => { console.error(error.message); process.exitCode = 1; });
+main().catch(error => { console.error(error?.stack || error?.message || error); process.exitCode = 1; });

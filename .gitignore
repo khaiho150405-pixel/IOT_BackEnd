@@ -28,6 +28,9 @@ backend/music/mp4/*.mp4
 !backend/music/mp4/.gitkeep
 backend/fonts/
 
+# Account database and token signing key (never commit)
+backend/data/
+
 # Converted speech models (scripts/setup-phowhisper.py)
 models/
 

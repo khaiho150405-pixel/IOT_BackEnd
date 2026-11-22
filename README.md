@@ -125,7 +125,6 @@ Mở `backend\.env` và sửa:
 | `LOCAL_VOICE_PYTHON` | đường dẫn `python.exe` từ bước 5 |
 | `LOCAL_WHISPER_MODEL` | giữ `../models/phowhisper-base-ct2` (tính từ thư mục `backend`) |
 | `DEVICE_TOKEN` | chuỗi ngẫu nhiên vừa tạo; **phải trùng** `WS_TOKEN` trong `include/config.h` của firmware |
-| `ADMIN_PIN` | đổi PIN điều khiển trên trang `/mobile` |
 | `VAD_RMS`, `SPEAKER_VOLUME` | giữ `325` và `0.5` nếu firmware dùng `MIC_SHIFT = 17` |
 
 Chỉ sao chép `.env.example` khi chưa có `.env`. Không commit `.env` và không gửi token/key qua chat.
@@ -167,17 +166,52 @@ Local LLM ready; kept loaded for the demo.
 
 Cấp nguồn ESP32: log hiện `Device hello accepted: <MAC>`, OLED hiện `Listen` là có thể nói.
 
+**Lần đầu tiên:** mở `http://localhost:3000/dashboard` **trên chính máy AI worker** và tạo tài khoản **Chủ nhà** (chỉ làm được từ máy này, và chỉ khi chưa có tài khoản nào). Sau đó dùng khu "Người dùng & phân quyền" để tạo tài khoản cho người khác.
+
 ### Kiểm tra máy AI worker đã giống hệ thống gốc
 
 | Kiểm tra | Kết quả mong đợi |
 | --- | --- |
 | `cd backend; npm.cmd test` | toàn bộ test `pass`, `fail 0` |
 | `http://localhost:3000/health` | `{"status":"ok",...}` |
-| `http://localhost:3000/dashboard` | thấy ESP32 online, nhiệt độ/độ ẩm, nút bật/tắt LED |
+| `http://localhost:3000/dashboard` | đăng nhập chủ nhà, thấy ESP32 online, nhiệt độ/độ ẩm, nút bật/tắt LED |
 | Nói "Bật đèn lên" | log `[Qwen] ... intent=led_on`, LED bật, ESP32 nói "Em đã bật đèn, đại ca." |
 | Nói "Một cộng một bằng mấy" | ESP32 trả lời "1 cộng 1 bằng 2" |
 
-Trên điện thoại cùng mạng: `http://<IP máy AI worker>:3000/mobile`.
+Trên điện thoại cùng mạng: `http://<IP máy AI worker>:3000/mobile` (hoặc `/dashboard`), đăng nhập bằng tài khoản được cấp.
+
+## Tài khoản và phân quyền
+
+Mọi API điều khiển, trang `/dashboard`, `/mobile` và broker MQTT đều yêu cầu đăng nhập; mỗi tài khoản chỉ thấy và điều khiển các thiết bị được cấp. Lệnh bằng **giọng nói** tại chỗ vẫn hoạt động không cần tài khoản (người nói ở trong phòng) và được ghi nhật ký với nguồn "Giọng nói".
+
+| Vai trò | Xem thiết bị | Điều khiển | Chat với AI | Quản lý người dùng | Thiết bị, phòng | Nhật ký |
+| --- | --- | --- | --- | --- | --- | --- |
+| **Chủ nhà** (1 người) | tất cả | tất cả | tất cả | tất cả (trừ chính mình) | ✅ | tất cả |
+| **Quản trị** | tất cả | tất cả | tất cả | thành viên và khách | ✅ | tất cả |
+| **Thành viên** | được cấp | nếu được cấp | nếu được cấp | ❌ | ❌ | của mình |
+| **Khách** | được cấp | nếu được cấp | ❌ không bao giờ | ❌ | ❌ | của mình |
+
+- Quyền cấp theo **từng thiết bị** hoặc **theo phòng** (mọi thiết bị trong phòng). ESP32 tự xuất hiện trong danh sách khi kết nối lần đầu; chủ nhà/quản trị đặt tên và gán phòng.
+- **Khách** luôn có hạn dùng (mặc định 24 giờ, gia hạn được); hết hạn thì không đăng nhập được.
+- Đăng nhập cấp **access token 15 phút** và **refresh token 30 ngày** (xoay vòng; dùng lại token cũ sẽ thu hồi cả phiên). Đổi mật khẩu, đổi vai trò hoặc khóa tài khoản làm mọi phiên cũ mất hiệu lực. Sai mật khẩu 5 lần trong 15 phút: khóa đăng nhập 5 phút.
+- Mật khẩu băm bằng scrypt; dữ liệu nằm trong `backend/data/aiot.sqlite` (hoặc PostgreSQL nếu đặt `DATABASE_URL`), khóa ký token trong `backend/data/auth-secret`. **Sao lưu thư mục `backend/data/`**, không commit nó (đã có trong `.gitignore`).
+- **MQTT:** đăng nhập bằng cùng tên/mật khẩu. Thành viên dùng topic theo thiết bị `aiot/device/<MAC>/led/set`, `aiot/device/<MAC>/command`, `aiot/device/<MAC>/sensor`…; topic tổng hợp (`aiot/sensor`, `aiot/#`) chỉ dành cho chủ nhà/quản trị. Lệnh không có quyền bị bỏ qua (không ngắt kết nối) và ghi nhật ký "Bị từ chối".
+- **Nhật ký** ghi: ai, lúc nào, nguồn (Web, App, Giọng nói, MQTT), thao tác, thiết bị, kết quả.
+- Quên mật khẩu chủ nhà: dừng backend, đổi tên `backend/data/aiot.sqlite` (dữ liệu cũ được giữ lại để tra cứu), khởi động lại và tạo chủ nhà mới.
+
+API chính (gửi `Authorization: Bearer <accessToken>`; app di động gửi thêm `X-Client: app`):
+
+| API | Quyền |
+| --- | --- |
+| `GET /api/auth/status`, `POST /api/auth/login`, `/refresh`, `/logout` | công khai |
+| `POST /api/auth/setup` | chỉ từ máy chạy backend, khi chưa có tài khoản |
+| `GET /api/auth/me`, `POST /api/auth/password`, `GET /api/devices`, `GET /api/rooms` | đã đăng nhập |
+| `POST /api/devices/:id/led` · `POST /api/devices/:id/text` | quyền điều khiển · quyền chat trên thiết bị |
+| `GET/POST /api/users`, `PATCH/DELETE /api/users/:id`, `PUT /api/users/:id/permissions` | chủ nhà/quản trị |
+| `PATCH /api/devices/:id`, `POST/DELETE /api/rooms` | chủ nhà/quản trị |
+| `GET /api/audit` | đã đăng nhập (người thường chỉ thấy của mình) |
+
+Lưu ý: hiện kết nối vẫn là HTTP thường trong mạng nội bộ. Trước khi mở ra Internet cần HTTPS/WSS (giai đoạn 3 của lộ trình).
 
 ## 3. Firmware ESP32-S3
 
@@ -225,11 +259,12 @@ Các module và ESP32 phải nối chung GND.
 - AI làm ngay yêu cầu, không hỏi lại; chỉ hỏi lại khi câu nghe sai đến mức không đoán được ý, hoặc với câu phủ định về đèn ("Đừng tắt đèn").
 - Hủy lượt đang xử lý hoặc dừng nói/nhạc: **nhấn rồi thả BOOT** khi board đang chạy (không nhấn RESET).
 - Nhạc: thêm file WAV PCM16 mono 16 kHz (≤ 10 MB) vào `backend/music` và khai báo trong `backend/music/catalog.json` (hoặc đặt file `.mp4` trong `backend/music/mp4`). Chuyển đổi: `ffmpeg -i input.mp3 -ac 1 -ar 16000 -c:a pcm_s16le backend/music/song.wav`. Thư viện trống thì AI nói thật là chưa có bài.
-- **MQTT** (broker nhúng cổng 1883, hoặc broker ngoài qua `MQTT_BROKER_URL`), dùng được với IoT MQTT Panel, MQTT Dash, MQTT Explorer:
-  - `aiot/led/set`: gửi `on`/`off`.
-  - `aiot/command`: `{"action":"led","state":"on"}` hoặc `{"action":"text","text":"Nhiệt độ phòng?"}`.
-  - `aiot/sensor`, `aiot/state`, `aiot/chat`: nhận cảm biến, trạng thái, hội thoại.
-  - Thử nhanh: `node backend/scripts/mqtt-client-demo.js [on|off|ask|monitor]`.
+- **MQTT** (broker nhúng cổng 1883, đăng nhập bằng tài khoản; xem mục Tài khoản và phân quyền), dùng được với IoT MQTT Panel, MQTT Dash, MQTT Explorer:
+  - `aiot/device/<MAC>/led/set`: gửi `on`/`off`.
+  - `aiot/device/<MAC>/command`: `{"action":"led","state":"on"}` hoặc `{"action":"text","text":"Nhiệt độ phòng?"}`.
+  - `aiot/device/<MAC>/sensor`, `.../state`, `.../chat`: nhận cảm biến, trạng thái, hội thoại.
+  - Thử nhanh (tài khoản chủ nhà/quản trị): `$env:MQTT_USER='...'; $env:MQTT_PASS='...'; node backend/scripts/mqtt-client-demo.js [on|off|ask|monitor]`.
+  - Broker ngoài (`MQTT_BROKER_URL`) không được backend kiểm soát quyền; hãy cấu hình quyền trên broker đó.
 
 ## 6. Xử lý sự cố
 

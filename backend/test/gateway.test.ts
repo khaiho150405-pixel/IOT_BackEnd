@@ -241,7 +241,8 @@ test('actual NestJS bootstrap exposes health and authenticates WS without callin
   const child = spawn(process.execPath, ['--import', 'tsx', 'src/main.ts'], {
     env: { ...process.env, GEMINI_API_KEY: 'test-only-not-a-real-key', DEVICE_TOKEN: token,
       AI_PROVIDER: 'gemini', HOST: '127.0.0.1', PORT: String(port), DATABASE_URL: '', FONT_DIR: '',
-      DEMO_FAST_CONFIRMATIONS: 'false' },
+      DEMO_FAST_CONFIRMATIONS: 'false', AUTH_DB_FILE: ':memory:', AUTH_JWT_SECRET: '',
+      OWNER_USERNAME: 'owner', OWNER_PASSWORD: 'owner-pass-123', MQTT_ENABLED: 'false' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
@@ -277,40 +278,63 @@ test('actual NestJS bootstrap exposes health and authenticates WS without callin
     audio: { format: 'pcm_s16le', sample_rate: 16000, channels: 1 } }));
   const [message] = await reply;
   assert.equal(JSON.parse(message.toString()).state, 'listening');
-  const dashboard = await fetch(`http://127.0.0.1:${port}/dashboard`);
+  const base = `http://127.0.0.1:${port}`;
+  const post = (path: string, body: unknown, token?: string, method = 'POST') => fetch(base + path, {
+    method, headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+  });
+  const get = (path: string, token?: string) => fetch(base + path, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+  const dashboard = await fetch(`${base}/dashboard`);
   assert.equal(dashboard.status, 200);
   assert.match(await dashboard.text(), /AIOT CONTROL DESK/);
-  const devices = await fetch(`http://127.0.0.1:${port}/api/dashboard/devices`);
-  const deviceSnapshot = await devices.json() as any;
+
+  // Every device API requires an account now (the shared PIN and localhost-only mode are gone).
+  assert.equal((await get('/api/dashboard/devices')).status, 401);
+  assert.equal((await post('/api/auth/login', { username: 'owner', password: 'wrong-password' })).status, 401);
+  const login = await post('/api/auth/login', { username: 'owner', password: 'owner-pass-123' });
+  assert.equal(login.status, 201, output);
+  const owner = (await login.json() as any).accessToken as string;
+
+  // The ESP32 registers itself on hello; the owner sees and controls it.
+  let deviceSnapshot: any;
+  for (let i = 0; i < 40; i++) {
+    deviceSnapshot = await (await get('/api/dashboard/devices', owner)).json();
+    if (deviceSnapshot.devices?.length) break;
+    await sleep(50);
+  }
   assert.equal(deviceSnapshot.devices.length, 1, output);
   assert.equal(deviceSnapshot.devices[0].id, 'bootstrap');
   assert.equal(deviceSnapshot.devices[0].connected, true);
   assert.equal(deviceSnapshot.devices[0].ledEnabled, true, 'initial state comes from ESP32 hello');
-  const rejectedOrigin = await fetch(`http://127.0.0.1:${port}/api/dashboard/devices`, {
-    headers: { origin: 'https://example.invalid' },
-  });
-  assert.equal(rejectedOrigin.status, 403);
-  const ledCommand = await fetch(`http://127.0.0.1:${port}/api/dashboard/devices/bootstrap/led`, {
-    method: 'POST', headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${port}` },
-    body: JSON.stringify({ enabled: false }),
-  });
+  assert.equal(deviceSnapshot.devices[0].canControl, true);
+  const ledCommand = await post('/api/dashboard/devices/bootstrap/led', { enabled: false }, owner);
   assert.equal(ledCommand.status, 201);
   assert.equal((await ledCommand.json() as any).ledEnabled, false);
-  const invalidText = await fetch(`http://127.0.0.1:${port}/api/dashboard/devices/bootstrap/text`, {
-    method: 'POST', headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${port}` },
-    body: JSON.stringify({ text: '   ' }),
-  });
-  assert.equal(invalidText.status, 400);
-  const offlineText = await fetch(`http://127.0.0.1:${port}/api/dashboard/devices/missing-device/text`, {
-    method: 'POST', headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${port}` },
-    body: JSON.stringify({ text: 'Xin chào' }),
-  });
-  assert.equal(offlineText.status, 404);
-  const offlineCommand = await fetch(`http://127.0.0.1:${port}/api/dashboard/devices/missing-device/led`, {
-    method: 'POST', headers: { 'content-type': 'application/json', origin: `http://127.0.0.1:${port}` },
-    body: JSON.stringify({ enabled: true }),
-  });
-  assert.equal(offlineCommand.status, 404);
+  assert.equal((await post('/api/dashboard/devices/bootstrap/text', { text: '   ' }, owner)).status, 400);
+  assert.equal((await post('/api/dashboard/devices/missing-device/text', { text: 'Xin chào' }, owner)).status, 404);
+  assert.equal((await post('/api/dashboard/devices/missing-device/led', { enabled: true }, owner)).status, 404);
+
+  // A member sees nothing until granted; control does not imply chatting with the assistant.
+  const created = await post('/api/users', { username: 'member1', password: 'member-pass-1', role: 'member' }, owner);
+  assert.equal(created.status, 201);
+  const memberId = (await created.json() as any).id;
+  const member = (await (await post('/api/auth/login', { username: 'member1', password: 'member-pass-1' })).json() as any).accessToken;
+  assert.deepEqual((await (await get('/api/devices', member)).json() as any).devices, []);
+  assert.equal((await post('/api/devices/bootstrap/led', { enabled: true }, member)).status, 403);
+  assert.equal((await post('/api/users', { username: 'x12', password: 'whatever-123' }, member)).status, 403);
+  const grant = await post(`/api/users/${memberId}/permissions`,
+    { permissions: [{ deviceId: 'bootstrap', canControl: true, canChat: false }] }, owner, 'PUT');
+  assert.equal(grant.status, 200);
+  assert.equal((await post('/api/devices/bootstrap/led', { enabled: true }, member)).status, 201);
+  assert.equal((await post('/api/devices/bootstrap/text', { text: 'Xin chào' }, member)).status, 403);
+
+  // Audit trail: successful and refused actions, with who did them.
+  const audit = (await (await get('/api/audit', owner)).json() as any).entries as any[];
+  assert.ok(audit.some(e => e.username === 'owner' && e.action === 'led:off' && e.result === 'ok'));
+  assert.ok(audit.some(e => e.username === 'member1' && e.action === 'device:control' && e.result === 'denied'));
+  assert.ok(audit.some(e => e.username === 'member1' && e.action === 'led:on' && e.result === 'ok'));
+  const ownAudit = (await (await get('/api/audit', member)).json() as any).entries as any[];
+  assert.ok(ownAudit.length > 0 && ownAudit.every(e => e.username === 'member1'), 'members only see their own entries');
   ws.close(); await once(ws, 'close');
 });
 

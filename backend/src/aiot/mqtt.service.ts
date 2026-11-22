@@ -1,4 +1,6 @@
-import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@nestjs/common';
+import { randomBytes } from 'node:crypto';
+import { Action, AuthService, AuthUser } from '../auth/auth.service';
 import { createServer, Server as NetServer } from 'node:net';
 import { Aedes } from 'aedes';
 import * as mqtt from 'mqtt';
@@ -39,6 +41,11 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
   private gateway?: GatewayBridge;
   private embedded = false;
   private brokerPort = Number(process.env.MQTT_PORT || 1883);
+  // The backend's own client signs in to the embedded broker with a per-process secret.
+  private readonly internalUser = '__aiot_backend__';
+  private readonly internalPassword = randomBytes(24).toString('base64url');
+
+  constructor(@Optional() @Inject(AuthService) private auth?: AuthService) {}
 
   setGateway(gateway: GatewayBridge) {
     this.gateway = gateway;
@@ -60,7 +67,11 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
 
   private async startEmbeddedBroker(): Promise<void> {
     try {
-      this.broker = new Aedes();
+      this.broker = new Aedes(this.auth ? {
+        authenticate: this.authenticate.bind(this),
+        authorizePublish: this.authorizePublish.bind(this),
+        authorizeSubscribe: this.authorizeSubscribe.bind(this),
+      } : {});
       await this.broker.listen();
       this.netServer = createServer(this.broker.handle.bind(this.broker));
 
@@ -97,8 +108,13 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
         connectTimeout: 5000,
         reconnectPeriod: 5000,
       };
-      if (process.env.MQTT_USERNAME) opts.username = process.env.MQTT_USERNAME;
-      if (process.env.MQTT_PASSWORD) opts.password = process.env.MQTT_PASSWORD;
+      if (this.embedded && this.auth) {
+        opts.username = this.internalUser;
+        opts.password = this.internalPassword;
+      } else {
+        if (process.env.MQTT_USERNAME) opts.username = process.env.MQTT_USERNAME;
+        if (process.env.MQTT_PASSWORD) opts.password = process.env.MQTT_PASSWORD;
+      }
 
       this.client = mqtt.connect(url, opts);
 
@@ -200,6 +216,79 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
       broker: this.embedded ? 'embedded' : 'external',
     });
     this.client.publish('aiot/system/status', payload, { qos: 1, retain: true });
+  }
+
+  // ---------------------------------------------------------------- embedded broker security
+  // Every MQTT client signs in with a user account (same username/password as the web).
+  // Commands are checked against that account's device permissions on every publish.
+
+  private authenticate(client: any, username: string | undefined, password: Buffer | undefined,
+    done: (error: any, success: boolean | null) => void) {
+    if (username === this.internalUser) {
+      const ok = !!password && password.toString() === this.internalPassword;
+      if (ok) client.aiotInternal = true;
+      return done(ok ? null : Object.assign(new Error('Bad credentials'), { returnCode: 4 }), ok);
+    }
+    if (!username || !password) return done(Object.assign(new Error('Login required'), { returnCode: 4 }), false);
+    const ip = String(client?.conn?.remoteAddress || '').replace(/^::ffff:/, '');
+    this.auth!.checkCredentials(username, password.toString(), ip).then(user => {
+      client.aiotUser = this.auth!.toAuthUser(user);
+      void this.auth!.audit({ user: client.aiotUser, source: 'mqtt', action: 'auth:login', ip });
+      done(null, true);
+    }, error => {
+      void this.auth!.audit({ username: String(username).slice(0, 64), source: 'mqtt', action: 'auth:login', result: 'denied', ip });
+      done(Object.assign(new Error((error as Error).message), { returnCode: 4 }), false);
+    });
+  }
+
+  /** Which permission a command needs: chatting with the AI needs device:chat, status needs view. */
+  private requiredAction(topic: string, payload: string): Action | undefined {
+    if (topic === 'aiot/led/set' || /^aiot\/device\/[^/]+\/led\/set$/.test(topic)) return 'device:control';
+    if (topic === 'aiot/command' || /^aiot\/device\/[^/]+\/command$/.test(topic)) {
+      let action: string | undefined;
+      try { action = JSON.parse(payload)?.action; } catch { /* plain text: treat as control */ }
+      if (action === 'text' || action === 'say') return 'device:chat';
+      if (action === 'status') return 'device:view';
+      return 'device:control';
+    }
+    return undefined; // telemetry topics are published by the backend only
+  }
+
+  private authorizePublish(client: any, packet: any, callback: (error?: Error | null) => void) {
+    if (!client || client.aiotInternal) return callback(null);
+    const user: AuthUser | undefined = client.aiotUser;
+    const topic = String(packet.topic || '');
+    const payload = Buffer.isBuffer(packet.payload) ? packet.payload.toString('utf8') : String(packet.payload ?? '');
+    const action = this.requiredAction(topic, payload);
+    const deviceId = action ? this.resolveDeviceId(topic) : undefined;
+    // Refusing with an error makes aedes disconnect the client, so one wrong tap in a phone
+    // MQTT app would drop the session. Instead the packet is diverted to a "$" topic that no
+    // subscription (not even "#") matches, and is never retained: it is dropped, and audited.
+    const deny = (reason: string) => {
+      void this.auth!.audit({ user, source: 'mqtt', action: action ?? 'mqtt:publish', deviceId, result: 'denied', detail: `${topic}: ${reason}` });
+      packet.topic = '$aiot/denied';
+      packet.retain = false;
+      callback(null);
+    };
+    if (!user || !action) return deny('chỉ backend được gửi lên topic này');
+    if (!deviceId) return deny('không có thiết bị');
+    this.auth!.can(user, action, deviceId).then(ok => {
+      if (!ok) return deny('không có quyền');
+      void this.auth!.audit({ user, source: 'mqtt', action, deviceId, detail: `${topic}: ${payload.slice(0, 200)}` });
+      callback(null);
+    }, () => deny('lỗi kiểm tra quyền'));
+  }
+
+  /** Users may follow their own devices; aggregate topics and wildcards are for owner/admin. */
+  private authorizeSubscribe(client: any, subscription: any, callback: (error: Error | null, subscription?: any) => void) {
+    if (client?.aiotInternal) return callback(null, subscription);
+    const user: AuthUser | undefined = client?.aiotUser;
+    const topic = String(subscription?.topic || '');
+    if (!user) return callback(null, null);
+    if (user.role === 'owner' || user.role === 'admin') return callback(null, subscription);
+    const match = /^aiot\/device\/([^/+#]+)\/[^#+]*[^/]$/.exec(topic) || /^aiot\/device\/([^/+#]+)\/#$/.exec(topic);
+    if (!match) return callback(null, null);
+    this.auth!.can(user, 'device:view', match[1]).then(ok => callback(null, ok ? subscription : null), () => callback(null, null));
   }
 
   private resolveDeviceId(topic: string): string | undefined {

@@ -155,8 +155,11 @@
       align-items: center;
       gap: 6px;
     }
-    body.is-guest .locked-notice { display: flex; }
-    body.is-guest .admin-only { opacity: 0.45; pointer-events: none !important; }
+    body.no-control #ledLockNotice, body.no-chat #chatLockNotice { display: flex; }
+    body.no-control .control-only, body.no-chat .chat-only { opacity: 0.45; pointer-events: none !important; }
+    .device-select { width: 100%; margin-top: 8px; padding: 8px 10px; border-radius: 10px; background: rgba(0,0,0,0.25);
+      color: inherit; border: 1px solid rgba(148,163,184,0.25); font-size: 0.85rem; }
+    .device-select[hidden] { display: none; }
 
     /* Modal PIN */
     .modal-backdrop {
@@ -506,7 +509,7 @@
     .mqtt-guide th { color: var(--text); }
   </style>
 </head>
-<body class="is-guest">
+<body class="no-control no-chat">
   <div class="container">
     <header>
       <div class="logo-group">
@@ -527,11 +530,12 @@
     <!-- Role & Security Bar -->
     <div class="role-bar">
       <div class="role-badge guest" id="roleBadge">
-        <span id="roleIcon">👁️</span>
-        <span id="roleText">Khán giả (Chỉ xem)</span>
+        <span id="roleIcon">🔒</span>
+        <span id="roleText">Chưa đăng nhập</span>
       </div>
-      <button class="btn-role-action" id="btnRoleAction" onclick="handleRoleClick()">🔑 Mở khóa Admin</button>
+      <button class="btn-role-action" id="btnRoleAction" onclick="handleRoleClick()">🔑 Đăng nhập</button>
     </div>
+    <select id="deviceSelect" class="device-select" hidden aria-label="Chọn thiết bị"></select>
 
     <!-- Sensors (Public for everyone) -->
     <div class="glass-card">
@@ -560,7 +564,7 @@
           <div class="led-title">Minh họa trạng thái đèn</div>
           <div class="led-sub" id="ledSub">Trạng thái đèn trên mạch</div>
         </div>
-        <label class="switch admin-only">
+        <label class="switch control-only">
           <input type="checkbox" id="ledToggle">
           <span class="slider"></span>
         </label>
@@ -579,7 +583,7 @@
 
       <div class="locked-notice" id="ledLockNotice">
         <span>🔒</span>
-        <span>Chế độ chỉ xem: Cần quyền Admin để bật/tắt đèn</span>
+        <span>Tài khoản của bạn chưa được cấp quyền điều khiển thiết bị này</span>
       </div>
     </div>
 
@@ -588,7 +592,7 @@
       <div class="chat-box">
         <div style="font-weight: 600; font-size: 0.95rem;">Điều khiển giọng nói & AI</div>
         
-        <div class="pill-group admin-only">
+        <div class="pill-group chat-only">
           <button class="pill" onclick="sendQuick('Bật đèn')">💡 Bật đèn</button>
           <button class="pill" onclick="sendQuick('Tắt đèn')">🌑 Tắt đèn</button>
           <button class="pill" onclick="sendQuick('Nhiệt độ và độ ẩm trong phòng bao nhiêu?')">🌡️ Hỏi nhiệt độ</button>
@@ -597,16 +601,16 @@
         </div>
 
         <div class="chat-history" id="chatHistory">
-          <div class="chat-bubble assistant">Em chào đại ca! Em là trợ lý AIoT phòng thông minh. Đại ca và các đồng nghiệp có thể mở khóa Admin để điều khiển đèn và trò chuyện với em nhé!</div>
+          <div class="chat-bubble assistant">Em chào đại ca! Em là trợ lý AIoT phòng thông minh. Đăng nhập bằng tài khoản được cấp để xem và điều khiển các thiết bị của mình nhé!</div>
         </div>
 
-        <form class="input-form admin-only" id="chatForm">
+        <form class="input-form chat-only" id="chatForm">
           <input type="text" class="text-input" id="chatInput" placeholder="Nhập câu lệnh hoặc trò chuyện..." autocomplete="off">
           <button type="submit" class="send-btn" id="sendBtn">Gửi</button>
         </form>
         <div class="locked-notice" id="chatLockNotice">
           <span>🔒</span>
-          <span>Chế độ chỉ xem: Chỉ quản trị viên mới có thể ra lệnh điều khiển</span>
+          <span>Tài khoản của bạn chưa được cấp quyền trò chuyện / ra lệnh cho AI trên thiết bị này</span>
         </div>
       </div>
     </div>
@@ -631,266 +635,284 @@
             <td><code>1883</code></td>
           </tr>
           <tr>
-            <td>Topic điều khiển</td>
-            <td><code>aiot/command</code> hoặc <code>aiot/led/set</code></td>
+            <td>Username / Password</td>
+            <td>Cùng tài khoản đăng nhập trang này</td>
           </tr>
           <tr>
-            <td>Topic nhận cảm biến</td>
-            <td><code>aiot/sensor</code></td>
+            <td>Bật/tắt đèn</td>
+            <td><code>aiot/device/<span class="mqtt-mac">MAC</span>/led/set</code></td>
           </tr>
           <tr>
-            <td>Topic trạng thái</td>
-            <td><code>aiot/state</code></td>
+            <td>Lệnh / hỏi AI</td>
+            <td><code>aiot/device/<span class="mqtt-mac">MAC</span>/command</code></td>
           </tr>
           <tr>
-            <td>Topic hội thoại AI</td>
-            <td><code>aiot/chat</code></td>
+            <td>Cảm biến / trạng thái</td>
+            <td><code>aiot/device/<span class="mqtt-mac">MAC</span>/sensor</code>, <code>.../state</code></td>
           </tr>
         </table>
 
         <div style="margin-top: 12px; font-size: 0.8rem; background: rgba(0,0,0,0.25); padding: 10px; border-radius: 10px;">
           <strong>💡 Mẹo dùng trên điện thoại:</strong><br>
-          - Bật đèn: Publish <code>on</code> tới <code>aiot/led/set</code><br>
-          - Tắt đèn: Publish <code>off</code> tới <code>aiot/led/set</code><br>
-          - Hỏi nhiệt độ / trò chuyện: Publish <code>{"action":"text","text":"Nhiệt độ phòng?"}</code> tới <code>aiot/command</code>
+          - Bật/tắt đèn: Publish <code>on</code> / <code>off</code> tới <code>aiot/device/MAC/led/set</code><br>
+          - Hỏi nhiệt độ / trò chuyện: Publish <code>{"action":"text","text":"Nhiệt độ phòng?"}</code> tới <code>aiot/device/MAC/command</code><br>
+          - Mỗi tài khoản chỉ thấy và điều khiển được thiết bị mình có quyền; lệnh không có quyền bị bỏ qua và ghi nhật ký.
         </div>
       </div>
     </details>
   </div>
 
-  <!-- Modal Nhập PIN Quản Trị -->
-  <div class="modal-backdrop" id="pinModal">
-    <div class="modal-card">
+  <!-- Modal Đăng nhập -->
+  <div class="modal-backdrop" id="loginModal">
+    <form class="modal-card" id="loginForm" autocomplete="on">
       <div style="font-size: 2.2rem; margin-bottom: 8px;">🔑</div>
-      <div class="modal-title">Mở khóa Quản Trị Viên</div>
-      <div class="modal-sub">Dành cho đại ca và đồng nghiệp. Nhập mã PIN bảo mật để mở quyền bật/tắt đèn và ra lệnh cho phòng thông minh.</div>
-      <input type="password" id="inputPin" class="pin-input" placeholder="Nhập mã PIN bảo mật..." maxlength="12" autocomplete="off">
-      <div style="color: #ef4444; font-size: 0.8rem; margin-bottom: 12px; display: none;" id="pinError">Mã PIN không đúng, vui lòng thử lại!</div>
+      <div class="modal-title">Đăng nhập AIoT Smart Room</div>
+      <div class="modal-sub">Dùng tài khoản do chủ nhà hoặc quản trị viên cấp. Mỗi tài khoản chỉ điều khiển được các thiết bị được giao.</div>
+      <input type="text" id="loginUser" class="pin-input" placeholder="Tên đăng nhập" maxlength="32" autocomplete="username" autocapitalize="none" required>
+      <input type="password" id="loginPass" class="pin-input" placeholder="Mật khẩu" maxlength="128" autocomplete="current-password" required>
+      <div style="color: #ef4444; font-size: 0.8rem; margin-bottom: 12px; display: none;" id="loginError"></div>
       <div class="modal-btns">
-        <button type="button" class="btn-modal cancel" onclick="closePinModal()">Hủy</button>
-        <button type="button" class="btn-modal primary" onclick="submitPin()">Xác nhận</button>
+        <button type="submit" class="btn-modal primary" id="loginBtn">Đăng nhập</button>
       </div>
-    </div>
+    </form>
   </div>
 
   <script>
+    // ---------------------------------------------------------------- session
+    const SESSION_KEY = 'aiot_session';
+    let session = null;      // { accessToken, refreshToken, user }
+    let devices = [];
     let activeDeviceId = null;
     let isBusy = false;
-    let isAdmin = false;
+    const ROLE_LABEL = { owner: ['👑', 'Chủ nhà'], admin: ['🛡️', 'Quản trị'], member: ['👤', 'Thành viên'], guest: ['🎫', 'Khách'] };
 
-    function getAdminPin() {
-      return localStorage.getItem('aiot_admin_pin') || '';
+    function loadSession() {
+      try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { session = null; }
+    }
+    function saveSession(next) {
+      session = next;
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify(next)); } catch { /* private mode */ }
+    }
+    function clearSession() {
+      session = null;
+      try { localStorage.removeItem(SESSION_KEY); localStorage.removeItem('aiot_admin_pin'); } catch { }
     }
 
-    function applyRoleUI(adminStatus) {
-      isAdmin = !!adminStatus;
-      const roleBadge = document.getElementById('roleBadge');
-      const roleIcon = document.getElementById('roleIcon');
-      const roleText = document.getElementById('roleText');
-      const btnRoleAction = document.getElementById('btnRoleAction');
-
-      if (isAdmin) {
-        document.body.classList.remove('is-guest');
-        roleBadge.className = 'role-badge admin';
-        roleIcon.innerText = '👑';
-        roleText.innerText = 'Quản trị viên (Đại ca)';
-        btnRoleAction.className = 'btn-role-action logout';
-        btnRoleAction.innerText = 'Khóa lại 🔒';
-        document.getElementById('chatInput').placeholder = 'Nhập câu lệnh hoặc trò chuyện với AI...';
-      } else {
-        document.body.classList.add('is-guest');
-        roleBadge.className = 'role-badge guest';
-        roleIcon.innerText = '👁️';
-        roleText.innerText = 'Khán giả (Chỉ xem)';
-        btnRoleAction.className = 'btn-role-action';
-        btnRoleAction.innerText = '🔑 Mở khóa Admin';
-        document.getElementById('chatInput').placeholder = '🔒 Chế độ khán giả: Chỉ xem, không thể gửi lệnh';
+    let refreshing = null;
+    function refreshSession() {
+      if (!session || !session.refreshToken) return Promise.resolve(false);
+      if (!refreshing) {
+        refreshing = fetch('/api/auth/refresh', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken: session.refreshToken }),
+        }).then(async res => {
+          if (!res.ok) return false;
+          saveSession(await res.json());
+          return true;
+        }).catch(() => false).finally(() => { refreshing = null; });
       }
+      return refreshing;
+    }
+
+    /** fetch() with the access token; renews it once on 401, otherwise asks to sign in again. */
+    async function api(path, options = {}) {
+      const send = () => fetch(path, { cache: 'no-store', ...options, headers: {
+        'Content-Type': 'application/json', ...(options.headers || {}),
+        ...(session ? { Authorization: 'Bearer ' + session.accessToken } : {}),
+      } });
+      let res = await send();
+      if (res.status === 401 && await refreshSession()) res = await send();
+      if (res.status === 401) { signedOut('Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.'); throw new Error('Phiên đăng nhập đã hết hạn.'); }
+      return res;
+    }
+    async function errorText(res) {
+      try { const body = await res.json(); return Array.isArray(body.message) ? body.message.join(', ') : body.message || res.statusText; }
+      catch { return res.statusText; }
+    }
+
+    // ---------------------------------------------------------------- UI state
+    function applyAccessUI() {
+      const roleBadge = document.getElementById('roleBadge');
+      const btn = document.getElementById('btnRoleAction');
+      const device = devices.find(d => d.id === activeDeviceId);
+      if (!session) {
+        roleBadge.className = 'role-badge guest';
+        document.getElementById('roleIcon').innerText = '🔒';
+        document.getElementById('roleText').innerText = 'Chưa đăng nhập';
+        btn.className = 'btn-role-action';
+        btn.innerText = '🔑 Đăng nhập';
+      } else {
+        const [icon, label] = ROLE_LABEL[session.user.role] || ['👤', session.user.role];
+        roleBadge.className = 'role-badge ' + (['owner', 'admin'].includes(session.user.role) ? 'admin' : 'guest');
+        document.getElementById('roleIcon').innerText = icon;
+        document.getElementById('roleText').innerText = session.user.displayName + ' · ' + label;
+        btn.className = 'btn-role-action logout';
+        btn.innerText = 'Đăng xuất';
+      }
+      const canControl = !!(device && device.canControl);
+      const canChat = !!(device && device.canChat);
+      document.body.classList.toggle('no-control', !canControl);
+      document.body.classList.toggle('no-chat', !canChat);
+      document.getElementById('chatInput').placeholder = canChat ?
+        'Nhập câu lệnh hoặc trò chuyện với AI...' : '🔒 Tài khoản chưa có quyền trò chuyện với AI';
     }
 
     function handleRoleClick() {
-      if (isAdmin) {
-        logoutAdmin();
-      } else {
-        openPinModal();
-      }
+      if (session) logout(); else openLogin();
+    }
+    function openLogin(message) {
+      const err = document.getElementById('loginError');
+      err.style.display = message ? 'block' : 'none';
+      err.innerText = message || '';
+      document.getElementById('loginModal').classList.add('show');
+      setTimeout(() => document.getElementById(document.getElementById('loginUser').value ? 'loginPass' : 'loginUser').focus(), 100);
+    }
+    function signedOut(message) {
+      clearSession();
+      devices = []; activeDeviceId = null;
+      renderDevice();
+      openLogin(message);
+    }
+    async function logout() {
+      if (!confirm('Đăng xuất khỏi tài khoản này?')) return;
+      const token = session && session.refreshToken;
+      signedOut();
+      try { await fetch('/api/auth/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: token }) }); } catch { }
     }
 
-    function openPinModal() {
-      const modal = document.getElementById('pinModal');
-      const input = document.getElementById('inputPin');
-      const err = document.getElementById('pinError');
-      err.style.display = 'none';
-      input.value = '';
-      modal.classList.add('show');
-      setTimeout(() => input.focus(), 100);
-    }
-
-    function closePinModal() {
-      document.getElementById('pinModal').classList.remove('show');
-    }
-
-    async function submitPin() {
-      const input = document.getElementById('inputPin');
-      const pin = input.value.trim();
-      const err = document.getElementById('pinError');
-      if (!pin) {
-        err.innerText = 'Vui lòng nhập mã PIN!';
-        err.style.display = 'block';
-        return;
-      }
-
+    document.getElementById('loginForm').addEventListener('submit', async e => {
+      e.preventDefault();
+      const err = document.getElementById('loginError');
+      const btn = document.getElementById('loginBtn');
+      btn.disabled = true; btn.innerText = 'Đang đăng nhập...';
       try {
-        const res = await fetch('/api/mobile/auth', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ pin })
+        const res = await fetch('/api/auth/login', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: document.getElementById('loginUser').value.trim(), password: document.getElementById('loginPass').value }),
         });
-        if (!res.ok) {
-          throw new Error('Mã PIN không chính xác!');
-        }
-        localStorage.setItem('aiot_admin_pin', pin);
-        closePinModal();
-        applyRoleUI(true);
-        appendChat('assistant', '🎉 Xác thực Quản trị viên thành công! Em chào đại ca, em đã mở khóa quyền điều khiển rồi ạ.');
-      } catch (e) {
-        err.innerText = e.message || 'Mã PIN không đúng!';
+        if (!res.ok) throw new Error(await errorText(res));
+        saveSession(await res.json());
+        document.getElementById('loginPass').value = '';
+        document.getElementById('loginModal').classList.remove('show');
+        appendChat('assistant', '🎉 Chào ' + session.user.displayName + '! Em đã mở các thiết bị đại ca được phép dùng.');
+        await updateStatus();
+      } catch (ex) {
+        err.innerText = ex.message || 'Đăng nhập không thành công.';
         err.style.display = 'block';
+      } finally {
+        btn.disabled = false; btn.innerText = 'Đăng nhập';
       }
-    }
-
-    function logoutAdmin() {
-      if (confirm('Đại ca có muốn khóa lại và quay về Chế độ chỉ xem không ạ?')) {
-        localStorage.removeItem('aiot_admin_pin');
-        applyRoleUI(false);
-      }
-    }
-
-    document.getElementById('inputPin').addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') submitPin();
-      if (e.key === 'Escape') closePinModal();
     });
 
-    async function loadMqttInfo() {
-      try {
-        const res = await fetch('/api/mobile/info');
-        const data = await res.json();
-        if (data.broker) {
-          document.getElementById('mqttHost').innerText = window.location.hostname || data.broker.host;
-        }
-      } catch (e) {
-        document.getElementById('mqttHost').innerText = window.location.hostname;
-      }
-    }
+    // ---------------------------------------------------------------- devices
+    document.getElementById('deviceSelect').addEventListener('change', e => {
+      activeDeviceId = e.target.value;
+      renderDevice();
+    });
 
     async function updateStatus() {
+      if (!session) return;
       try {
-        const res = await fetch('/api/mobile/devices');
-        const data = await res.json();
-        const devices = data.devices || [];
-        const onlineDevice = devices.find(d => d.connected) || devices[0];
-
-        const badge = document.getElementById('statusBadge');
-        const statusText = document.getElementById('statusText');
-        const macElem = document.getElementById('deviceMac');
-        const tempElem = document.getElementById('tempVal');
-        const humidElem = document.getElementById('humidVal');
-        const ledToggle = document.getElementById('ledToggle');
-        const ledSub = document.getElementById('ledSub');
-
-        if (onlineDevice && onlineDevice.connected) {
-          activeDeviceId = onlineDevice.id;
-          badge.className = 'status-badge';
-          statusText.innerText = 'Trực tuyến';
-          macElem.innerText = 'ESP32: ' + onlineDevice.id;
-
-          if (onlineDevice.sensor) {
-            tempElem.innerText = onlineDevice.sensor.temperature.toFixed(1).replace('.', ',') + '°C';
-            humidElem.innerText = Math.round(onlineDevice.sensor.humidity) + '%';
-          } else {
-            tempElem.innerText = '--.-°C';
-            humidElem.innerText = '--%';
-          }
-
-          ledToggle.disabled = !isAdmin;
-          ledToggle.checked = !!onlineDevice.ledEnabled;
-          ledSub.innerText = onlineDevice.ledEnabled ? 'Đèn đang BẬT' : 'Đèn đang TẮT';
-
-          const bulb = document.getElementById('phoneLampBulb');
-          const glow = document.getElementById('phoneLampGlow');
-          const statusTxt = document.getElementById('phoneLampStatusText');
-          if (onlineDevice.ledEnabled) {
-            bulb.setAttribute('fill', '#4ade80');
-            bulb.setAttribute('stroke', '#4ade80');
-            glow.style.background = 'radial-gradient(circle, rgba(74,222,128,0.55) 0%, transparent 70%)';
-            glow.style.opacity = '1';
-            statusTxt.innerText = '💡 ĐÈN ĐANG BẬT';
-            statusTxt.style.color = '#4ade80';
-          } else {
-            bulb.setAttribute('fill', '#1e293b');
-            bulb.setAttribute('stroke', '#475569');
-            glow.style.opacity = '0';
-            statusTxt.innerText = '🌑 ĐÈN ĐANG TẮT';
-            statusTxt.style.color = '#94a3b8';
-          }
-        } else {
-          badge.className = 'status-badge offline';
-          statusText.innerText = 'Ngoại tuyến';
-          macElem.innerText = 'ESP32 mất kết nối';
-          tempElem.innerText = '--.-°C';
-          humidElem.innerText = '--%';
-          ledToggle.disabled = true;
-          ledSub.innerText = 'ESP32 chưa kết nối';
-          const bulb = document.getElementById('phoneLampBulb');
-          const glow = document.getElementById('phoneLampGlow');
-          const statusTxt = document.getElementById('phoneLampStatusText');
-          if (bulb) {
-            bulb.setAttribute('fill', '#1e293b');
-            bulb.setAttribute('stroke', '#475569');
-            glow.style.opacity = '0';
-            statusTxt.innerText = '⚪ CHƯA KẾT NỐI';
-            statusTxt.style.color = '#64748b';
-          }
+        const res = await api('/api/devices');
+        if (!res.ok) throw new Error(await errorText(res));
+        devices = (await res.json()).devices || [];
+        if (!devices.some(d => d.id === activeDeviceId)) {
+          activeDeviceId = (devices.find(d => d.connected) || devices[0] || {}).id || null;
         }
+        const select = document.getElementById('deviceSelect');
+        select.hidden = devices.length < 2;
+        const options = devices.map(d => d.id + '|' + d.name + '|' + d.connected).join(',');
+        if (select.dataset.options !== options) {
+          select.dataset.options = options;
+          select.replaceChildren(...devices.map(d => {
+            const option = document.createElement('option');
+            option.value = d.id;
+            option.textContent = (d.connected ? '🟢 ' : '⚪ ') + (d.name || d.id);
+            return option;
+          }));
+        }
+        select.value = activeDeviceId || '';
+        renderDevice();
       } catch (e) {
         console.warn('Status poll error', e);
       }
     }
 
-    function handleLampIllustrationClick() {
-      if (!isAdmin) {
-        openPinModal();
+    function renderDevice() {
+      const device = devices.find(d => d.id === activeDeviceId);
+      applyAccessUI();
+      const badge = document.getElementById('statusBadge');
+      const statusText = document.getElementById('statusText');
+      const macElem = document.getElementById('deviceMac');
+      const tempElem = document.getElementById('tempVal');
+      const humidElem = document.getElementById('humidVal');
+      const ledToggle = document.getElementById('ledToggle');
+      const ledSub = document.getElementById('ledSub');
+      const bulb = document.getElementById('phoneLampBulb');
+      const glow = document.getElementById('phoneLampGlow');
+      const statusTxt = document.getElementById('phoneLampStatusText');
+      document.querySelectorAll('.mqtt-mac').forEach(el => { el.textContent = device ? device.id : 'MAC'; });
+
+      if (device && device.connected) {
+        badge.className = 'status-badge';
+        statusText.innerText = 'Trực tuyến';
+        macElem.innerText = (device.name || 'ESP32') + ' · ' + device.id;
+        if (device.sensor) {
+          tempElem.innerText = device.sensor.temperature.toFixed(1).replace('.', ',') + '°C';
+          humidElem.innerText = Math.round(device.sensor.humidity) + '%';
+        } else {
+          tempElem.innerText = '--.-°C';
+          humidElem.innerText = '--%';
+        }
+        ledToggle.disabled = !device.canControl;
+        ledToggle.checked = !!device.ledEnabled;
+        ledSub.innerText = device.ledEnabled ? 'Đèn đang BẬT' : 'Đèn đang TẮT';
+        if (device.ledEnabled) {
+          bulb.setAttribute('fill', '#4ade80');
+          bulb.setAttribute('stroke', '#4ade80');
+          glow.style.background = 'radial-gradient(circle, rgba(74,222,128,0.55) 0%, transparent 70%)';
+          glow.style.opacity = '1';
+          statusTxt.innerText = '💡 ĐÈN ĐANG BẬT';
+          statusTxt.style.color = '#4ade80';
+        } else {
+          bulb.setAttribute('fill', '#1e293b');
+          bulb.setAttribute('stroke', '#475569');
+          glow.style.opacity = '0';
+          statusTxt.innerText = '🌑 ĐÈN ĐANG TẮT';
+          statusTxt.style.color = '#94a3b8';
+        }
       } else {
-        const toggle = document.getElementById('ledToggle');
-        toggle.click();
+        badge.className = 'status-badge offline';
+        statusText.innerText = session ? 'Ngoại tuyến' : 'Chưa đăng nhập';
+        macElem.innerText = !session ? 'Đăng nhập để xem thiết bị' :
+          devices.length ? ((device && device.name) || 'ESP32') + ' mất kết nối' : 'Tài khoản chưa được cấp thiết bị nào';
+        tempElem.innerText = '--.-°C';
+        humidElem.innerText = '--%';
+        ledToggle.disabled = true;
+        ledSub.innerText = 'ESP32 chưa kết nối';
+        bulb.setAttribute('fill', '#1e293b');
+        bulb.setAttribute('stroke', '#475569');
+        glow.style.opacity = '0';
+        statusTxt.innerText = '⚪ CHƯA KẾT NỐI';
+        statusTxt.style.color = '#64748b';
       }
     }
 
-    // Handle LED Toggle
+    function handleLampIllustrationClick() {
+      if (!session) return openLogin();
+      const device = devices.find(d => d.id === activeDeviceId);
+      if (device && device.canControl) document.getElementById('ledToggle').click();
+    }
+
     document.getElementById('ledToggle').addEventListener('change', async function(e) {
-      if (!activeDeviceId) return;
-      if (!isAdmin) {
-        e.preventDefault();
-        e.target.checked = !e.target.checked;
-        openPinModal();
-        return;
-      }
       const targetState = e.target.checked;
+      const device = devices.find(d => d.id === activeDeviceId);
+      if (!device || !device.canControl) { e.target.checked = !targetState; return; }
       try {
-        const res = await fetch(`/api/mobile/devices/${activeDeviceId}/led`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Admin-Pin': getAdminPin()
-          },
-          body: JSON.stringify({ enabled: targetState })
+        const res = await api('/api/devices/' + encodeURIComponent(device.id) + '/led', {
+          method: 'POST', body: JSON.stringify({ enabled: targetState }),
         });
-        if (res.status === 401 || res.status === 403) {
-          applyRoleUI(false);
-          openPinModal();
-          throw new Error('Cần mã PIN Quản trị viên để điều khiển đèn.');
-        }
-        if (!res.ok) throw new Error('Thao tác không thành công');
+        if (!res.ok) throw new Error(await errorText(res));
         updateStatus();
       } catch (err) {
         alert(err.message);
@@ -898,59 +920,39 @@
       }
     });
 
-    // Chat handling
+    // ---------------------------------------------------------------- chat
     function appendChat(role, text) {
       const history = document.getElementById('chatHistory');
       const bubble = document.createElement('div');
-      bubble.className = `chat-bubble ${role}`;
+      bubble.className = 'chat-bubble ' + role;
       bubble.innerText = text;
       history.appendChild(bubble);
       history.scrollTop = history.scrollHeight;
     }
 
-    async function sendQuick(text) {
-      if (!isAdmin) {
-        openPinModal();
-        return;
-      }
+    function sendQuick(text) {
       document.getElementById('chatInput').value = text;
       submitCurrent();
     }
 
     async function submitCurrent() {
-      if (!isAdmin) {
-        openPinModal();
-        return;
-      }
+      const device = devices.find(d => d.id === activeDeviceId);
+      if (!session) return openLogin();
+      if (!device || !device.canChat) return;
       const input = document.getElementById('chatInput');
       const text = input.value.trim();
-      if (!text || !activeDeviceId || isBusy) return;
-
+      if (!text || isBusy) return;
       appendChat('user', text);
       input.value = '';
       isBusy = true;
       document.getElementById('sendBtn').innerText = '...';
-
       try {
-        const res = await fetch(`/api/mobile/devices/${activeDeviceId}/text`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Admin-Pin': getAdminPin()
-          },
-          body: JSON.stringify({ text })
+        const res = await api('/api/devices/' + encodeURIComponent(device.id) + '/text', {
+          method: 'POST', body: JSON.stringify({ text }),
         });
-        if (res.status === 401 || res.status === 403) {
-          applyRoleUI(false);
-          openPinModal();
-          throw new Error('Chế độ chỉ xem. Vui lòng mở khóa Admin!');
-        }
+        if (!res.ok) throw new Error(await errorText(res));
         const data = await res.json();
-        if (data.reply) {
-          appendChat('assistant', data.reply);
-        } else {
-          appendChat('assistant', 'Dạ đại ca, em đã thực hiện xong lệnh rồi ạ.');
-        }
+        appendChat('assistant', data.reply || 'Dạ đại ca, em đã thực hiện xong lệnh rồi ạ.');
         updateStatus();
       } catch (err) {
         appendChat('assistant', 'Lỗi: ' + (err.message || 'Không thể gửi câu lệnh'));
@@ -960,37 +962,13 @@
       }
     }
 
-    document.getElementById('chatForm').addEventListener('submit', function(e) {
-      e.preventDefault();
-      submitCurrent();
-    });
+    document.getElementById('chatForm').addEventListener('submit', e => { e.preventDefault(); submitCurrent(); });
 
-    // Check saved PIN on page load
-    (async function initAuth() {
-      const savedPin = getAdminPin();
-      if (savedPin) {
-        try {
-          const res = await fetch('/api/mobile/auth', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pin: savedPin })
-          });
-          if (res.ok) {
-            applyRoleUI(true);
-          } else {
-            localStorage.removeItem('aiot_admin_pin');
-            applyRoleUI(false);
-          }
-        } catch {
-          applyRoleUI(true); // Network offline fallback
-        }
-      } else {
-        applyRoleUI(false);
-      }
-    })();
-
-    loadMqttInfo();
-    updateStatus();
+    // ---------------------------------------------------------------- start
+    loadSession();
+    document.getElementById('mqttHost').innerText = window.location.hostname;
+    renderDevice();
+    if (session) updateStatus(); else openLogin();
     setInterval(updateStatus, 2000);
   </script>
 </body>
