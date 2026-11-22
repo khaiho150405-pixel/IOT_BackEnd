@@ -315,27 +315,23 @@ test('actual NestJS bootstrap exposes health and authenticates WS without callin
   assert.equal((await post('/api/dashboard/devices/missing-device/text', { text: 'Xin chào' }, owner)).status, 404);
   assert.equal((await post('/api/dashboard/devices/missing-device/led', { enabled: true }, owner)).status, 404);
 
-  // A member sees nothing until granted; control does not imply chatting with the assistant.
-  const created = await post('/api/users', { username: 'member1', password: 'member-pass-1', role: 'member' }, owner);
+  // One account type: a second account (asked for as "member") controls the device at once
+  // and can itself create accounts. Without an account nothing can be switched.
+  const created = await post('/api/users', { username: 'friend1', password: 'friend-pass-1', role: 'member' }, owner);
   assert.equal(created.status, 201);
-  const memberId = (await created.json() as any).id;
-  const member = (await (await post('/api/auth/login', { username: 'member1', password: 'member-pass-1' })).json() as any).accessToken;
-  assert.deepEqual((await (await get('/api/devices', member)).json() as any).devices, []);
-  assert.equal((await post('/api/devices/bootstrap/led', { enabled: true }, member)).status, 403);
-  assert.equal((await post('/api/users', { username: 'x12', password: 'whatever-123' }, member)).status, 403);
-  const grant = await post(`/api/users/${memberId}/permissions`,
-    { permissions: [{ deviceId: 'bootstrap', canControl: true, canChat: false }] }, owner, 'PUT');
-  assert.equal(grant.status, 200);
-  assert.equal((await post('/api/devices/bootstrap/led', { enabled: true }, member)).status, 201);
-  assert.equal((await post('/api/devices/bootstrap/text', { text: 'Xin chào' }, member)).status, 403);
+  assert.equal((await created.json() as any).role, 'admin');
+  const friend = (await (await post('/api/auth/login', { username: 'friend1', password: 'friend-pass-1' })).json() as any).accessToken;
+  const friendDevices = (await (await get('/api/devices', friend)).json() as any).devices;
+  assert.equal(friendDevices.length, 1);
+  assert.ok(friendDevices[0].canControl && friendDevices[0].canChat);
+  assert.equal((await post('/api/devices/bootstrap/led', { enabled: true }, friend)).status, 201);
+  assert.equal((await post('/api/users', { username: 'friend2', password: 'friend-pass-2' }, friend)).status, 201);
+  assert.equal((await post('/api/devices/bootstrap/led', { enabled: false })).status, 401, 'visitors cannot control');
 
-  // Audit trail: successful and refused actions, with who did them.
-  const audit = (await (await get('/api/audit', owner)).json() as any).entries as any[];
+  // Audit trail: who did what; every account reads all of it.
+  const audit = (await (await get('/api/audit', friend)).json() as any).entries as any[];
   assert.ok(audit.some(e => e.username === 'owner' && e.action === 'led:off' && e.result === 'ok'));
-  assert.ok(audit.some(e => e.username === 'member1' && e.action === 'device:control' && e.result === 'denied'));
-  assert.ok(audit.some(e => e.username === 'member1' && e.action === 'led:on' && e.result === 'ok'));
-  const ownAudit = (await (await get('/api/audit', member)).json() as any).entries as any[];
-  assert.ok(ownAudit.length > 0 && ownAudit.every(e => e.username === 'member1'), 'members only see their own entries');
+  assert.ok(audit.some(e => e.username === 'friend1' && e.action === 'led:on' && e.result === 'ok'));
   ws.close(); await once(ws, 'close');
 });
 

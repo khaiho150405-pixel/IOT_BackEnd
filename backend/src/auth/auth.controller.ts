@@ -1,5 +1,5 @@
 import {
-  Body, Controller, Delete, ForbiddenException, Get, Inject, Param, Patch, Post, Put, Query, Req,
+  Body, Controller, Delete, ForbiddenException, Get, Inject, Param, Patch, Post, Query, Req,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { Require, clientIp, clientSource, currentUser, httpError } from './auth.guard';
@@ -73,7 +73,7 @@ export class AuthController {
     } catch (error) { httpError(error); }
   }
 
-  // ------------------------------------------------------------ users (owner/admin)
+  // ------------------------------------------------------------ users (every account)
 
   @Get('users')
   @Require('user:manage')
@@ -85,7 +85,7 @@ export class AuthController {
     try {
       const user = await this.auth.createUser(currentUser(req), body ?? {});
       void this.auth.audit({ user: currentUser(req), source: clientSource(req), action: 'user:create',
-        detail: `${user.username} (${user.role})`, ip: clientIp(req) });
+        detail: user.username, ip: clientIp(req) });
       return user;
     } catch (error) { httpError(error); }
   }
@@ -112,18 +112,7 @@ export class AuthController {
     } catch (error) { httpError(error); }
   }
 
-  @Put('users/:id/permissions')
-  @Require('user:manage')
-  async setPermissions(@Req() req: any, @Param('id') id: string, @Body() body: any) {
-    try {
-      const permissions = await this.auth.setPermissions(currentUser(req), id, body?.permissions);
-      void this.auth.audit({ user: currentUser(req), source: clientSource(req), action: 'user:permissions',
-        detail: `${id}: ${permissions.length} quyền`, ip: clientIp(req) });
-      return { permissions };
-    } catch (error) { httpError(error); }
-  }
-
-  // ------------------------------------------------------------ rooms & device settings (owner/admin)
+  // ------------------------------------------------------------ rooms & device settings (every account)
 
   @Get('rooms')
   @Require('authenticated')

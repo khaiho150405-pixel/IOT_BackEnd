@@ -126,6 +126,37 @@ test('local HTTPS, certificate download, HTTPS redirect, PWA files and the live 
   await waitFor(() => updates.some(u => u.type === 'devices' && u.devices.some((d: any) => d.id === 'live-dev' && d.ledEnabled === true)));
   assert.ok(Date.now() - switched < 2000, 'pushed within the 0.5 s change-detection window');
 
+  // Visitors without an account: read-only temperature/humidity/LED view, no MAC, no control.
+  const publicView = await fetch(`http://127.0.0.1:${port}/api/public/devices`);
+  assert.equal(publicView.status, 200);
+  const publicDevices = (await publicView.json() as any).devices;
+  const shown = publicDevices.find((d: any) => d.connected);
+  assert.ok(shown, 'the connected ESP32 is visible');
+  assert.equal(shown.ledEnabled, true);
+  assert.ok('sensor' in shown);
+  assert.equal(shown.canControl, false);
+  assert.ok(!JSON.stringify(publicDevices).includes('live-dev'), 'device id (MAC) is not exposed');
+  assert.deepEqual(Object.keys(shown).sort(), ['canChat', 'canControl', 'connected', 'id', 'ledEnabled', 'name', 'sensor']);
+  for (const path of ['/api/devices', '/api/users', '/api/audit'])
+    assert.equal((await fetch(`http://127.0.0.1:${port}${path}`)).status, 401, `${path} needs an account`);
+  const anonymousLed = await fetch(`http://127.0.0.1:${port}/api/devices/live-dev/led`, { method: 'POST',
+    headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }) });
+  assert.equal(anonymousLed.status, 401, 'visitors cannot switch the light');
+  const guest = new WebSocket(`wss://127.0.0.1:${httpsPort}/api/live`, { ca: caPem, servername: 'localhost' } as any);
+  const guestUpdates: any[] = [];
+  guest.on('message', data => guestUpdates.push(JSON.parse(data.toString())));
+  await once(guest, 'open');
+  guest.send(JSON.stringify({ type: 'guest' }));
+  const guestBegin = Date.now();
+  while (!guestUpdates.some(u => u.type === 'devices')) {
+    if (Date.now() - guestBegin > 5000) throw new Error(JSON.stringify(guestUpdates));
+    await sleep(25);
+  }
+  const guestDevices = guestUpdates.find(u => u.type === 'devices').devices;
+  assert.ok(guestDevices.some((d: any) => d.connected && d.ledEnabled === true && !d.canControl));
+  assert.ok(!JSON.stringify(guestUpdates).includes('live-dev'));
+  guest.close();
+
   // Unknown WebSocket paths are refused instead of hanging.
   const stray = new WebSocket(`ws://127.0.0.1:${port}/nope`);
   await once(stray, 'error');

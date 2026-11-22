@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
-  AuditLog, AuditSource, Device, Permission, RefreshToken, Role, ROLES, Room, User, authEntities,
+  AuditLog, AuditSource, Device, Permission, RefreshToken, Role, Room, User, authEntities,
 } from './entities';
 import { hashPassword, randomToken, sha256, signJwt, verifyJwt, verifyPassword } from './crypto';
 
@@ -20,7 +20,6 @@ export interface AuthUser {
   expiresAt: Date | null;
 }
 export interface DeviceAccess { view: boolean; control: boolean; chat: boolean }
-export interface PermissionInput { deviceId?: string | null; roomId?: string | null; canControl?: boolean; canChat?: boolean }
 export interface UserInput {
   username?: string; displayName?: string; password?: string; role?: Role;
   active?: boolean; expiresAt?: string | null;
@@ -64,6 +63,7 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
           ...(memory ? {} : { location: file, autoSave: true }) });
       await this.db.initialize();
       this.secret = this.loadSecret(memory || postgres ? undefined : join(dirname(file), 'auth-secret'));
+      await this.unifyAccounts();
       await this.bootstrapOwnerFromEnv();
       console.log(`[Auth] Accounts stored in ${postgres ? 'PostgreSQL' : memory ? 'memory' : file}`);
     })();
@@ -81,6 +81,20 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     const generated = randomToken(48);
     if (file) writeFileSync(file, generated, { mode: 0o600 });
     return generated;
+  }
+
+  /**
+   * One kind of account: everyone who signs in may control every device, chat and manage
+   * accounts. Older member/guest accounts become full accounts and their per-device grants
+   * are dropped. The first account ("owner") is only protected against lock-out.
+   */
+  private async unifyAccounts() {
+    const users = this.users();
+    const limited = await users.find({ where: [{ role: 'member' }, { role: 'guest' }] });
+    if (!limited.length) return;
+    for (const u of limited) await users.update({ id: u.id }, { role: 'admin', tokenVersion: u.tokenVersion + 1, updatedAt: new Date() });
+    await this.permissions().clear();
+    console.log(`[Auth] ${limited.length} limited account(s) now have full access (single account type).`);
   }
 
   private async bootstrapOwnerFromEnv() {
@@ -205,73 +219,44 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
 
   // ---------------------------------------------------------------- authorization
 
-  /** Access of one user to every known device. Owner/admin see and control everything. */
-  async deviceAccess(user: AuthUser): Promise<Map<string, DeviceAccess>> {
+  /** Every signed-in account sees, controls and chats with every known device. */
+  async deviceAccess(_user: AuthUser): Promise<Map<string, DeviceAccess>> {
     await this.ready();
     const devices = await this.devices().find();
-    const result = new Map<string, DeviceAccess>();
-    if (user.role === 'owner' || user.role === 'admin') {
-      for (const d of devices) result.set(d.id, { view: true, control: true, chat: true });
-      return result;
-    }
-    const grants = await this.permissions().findBy({ userId: user.id });
-    for (const device of devices) {
-      const applicable = grants.filter(g => g.deviceId === device.id || (g.roomId && g.roomId === device.roomId));
-      if (!applicable.length) continue;
-      result.set(device.id, {
-        view: true,
-        control: applicable.some(g => g.canControl),
-        // Guests may control granted devices but never talk to the assistant.
-        chat: user.role !== 'guest' && applicable.some(g => g.canChat),
-      });
-    }
-    return result;
+    return new Map(devices.map(d => [d.id, { view: true, control: true, chat: true }]));
   }
 
-  async can(user: AuthUser, action: Action, deviceId?: string): Promise<boolean> {
-    const admin = user.role === 'owner' || user.role === 'admin';
-    if (action === 'user:manage' || action === 'device:manage') return admin;
-    if (action === 'audit:view') return true; // filtered to the user's own entries for non-admins
-    if (!deviceId) return admin;
-    if (admin) return true;
-    const access = (await this.deviceAccess(user)).get(deviceId);
-    if (!access) return false;
-    return action === 'device:view' ? access.view : action === 'device:control' ? access.control : access.chat;
+  /** Single account type: a valid, active account may do everything (visitors without one only see /api/public). */
+  async can(_user: AuthUser, _action: Action, _deviceId?: string): Promise<boolean> {
+    return true;
   }
 
   // ---------------------------------------------------------------- user management
 
-  async listUsers(): Promise<Array<PublicUser & { permissions: Permission[] }>> {
+  async listUsers(): Promise<PublicUser[]> {
     await this.ready();
-    const [users, grants] = await Promise.all([this.users().find({ order: { createdAt: 'ASC' } }), this.permissions().find()]);
-    return users.map(u => ({ ...this.publicUser(u), permissions: grants.filter(g => g.userId === u.id) }));
+    return (await this.users().find({ order: { createdAt: 'ASC' } })).map(u => this.publicUser(u));
   }
 
-  async createUser(actor: AuthUser, input: UserInput): Promise<PublicUser> {
-    const role = input.role ?? 'member';
-    this.assertCanAssign(actor, role);
-    return this.publicUser(await this.insertUser({ ...input, role }));
+  /** Any account may add more accounts; they all get the same full access. */
+  async createUser(_actor: AuthUser, input: UserInput): Promise<PublicUser> {
+    return this.publicUser(await this.insertUser({ ...input, role: 'admin', expiresAt: null }));
   }
 
   async updateUser(actor: AuthUser, id: string, input: UserInput): Promise<PublicUser> {
     const user = await this.users().findOneBy({ id });
     if (!user) throw new AuthError(404, 'Không tìm thấy người dùng.');
-    this.assertCanManage(actor, user);
     const changes: Partial<User> = { updatedAt: new Date() };
     let invalidate = false;
     if (input.displayName !== undefined) changes.displayName = this.checkDisplayName(input.displayName);
-    if (input.role !== undefined && input.role !== user.role) {
-      if (user.role === 'owner') throw new AuthError(403, 'Không thể đổi vai trò của chủ nhà.');
-      this.assertCanAssign(actor, input.role);
-      changes.role = input.role; invalidate = true;
-    }
-    if (input.active !== undefined) {
-      if (user.role === 'owner' && !input.active) throw new AuthError(403, 'Không thể khóa tài khoản chủ nhà.');
+    if (input.active !== undefined && !!input.active !== user.active) {
+      if (!input.active) this.assertCanRemove(actor, user, 'khóa');
       changes.active = !!input.active; invalidate ||= !input.active;
     }
-    if (input.expiresAt !== undefined) changes.expiresAt = this.checkExpiry(input.expiresAt, changes.role ?? user.role);
-    else if (changes.role === 'guest' && !user.expiresAt) changes.expiresAt = this.checkExpiry(null, 'guest');
+    if (input.expiresAt !== undefined) changes.expiresAt = this.checkExpiry(input.expiresAt, user.role);
     if (input.password !== undefined) {
+      // The first account's password is changed only by its holder (it cannot be taken over).
+      if (user.role === 'owner' && actor.id !== user.id) throw new AuthError(403, 'Chỉ người dùng tài khoản đầu tiên mới đổi được mật khẩu của nó.');
       this.checkPassword(input.password);
       changes.passwordHash = await hashPassword(input.password); invalidate = true;
     }
@@ -284,46 +269,16 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   async deleteUser(actor: AuthUser, id: string) {
     const user = await this.users().findOneBy({ id });
     if (!user) throw new AuthError(404, 'Không tìm thấy người dùng.');
-    if (user.role === 'owner') throw new AuthError(403, 'Không thể xóa tài khoản chủ nhà.');
-    this.assertCanManage(actor, user);
+    this.assertCanRemove(actor, user, 'xóa');
     await this.permissions().delete({ userId: id });
     await this.refreshTokens().delete({ userId: id });
     await this.users().delete({ id });
   }
 
-  /** Replaces all grants of a member/guest. */
-  async setPermissions(actor: AuthUser, userId: string, inputs: PermissionInput[]): Promise<Permission[]> {
-    const user = await this.users().findOneBy({ id: userId });
-    if (!user) throw new AuthError(404, 'Không tìm thấy người dùng.');
-    this.assertCanManage(actor, user);
-    if (user.role === 'owner' || user.role === 'admin') throw new AuthError(400, 'Chủ nhà và quản trị đã có toàn quyền.');
-    if (!Array.isArray(inputs) || inputs.length > 200) throw new AuthError(400, 'Danh sách quyền không hợp lệ.');
-    const deviceIds = new Set((await this.devices().find()).map(d => d.id));
-    const roomIds = new Set((await this.rooms().find()).map(r => r.id));
-    const rows: Permission[] = inputs.map(p => {
-      const deviceId = p?.deviceId ? String(p.deviceId) : null, roomId = p?.roomId ? String(p.roomId) : null;
-      if (!!deviceId === !!roomId) throw new AuthError(400, 'Mỗi quyền phải chọn đúng một thiết bị hoặc một phòng.');
-      if (deviceId && !deviceIds.has(deviceId)) throw new AuthError(404, `Không có thiết bị ${deviceId}.`);
-      if (roomId && !roomIds.has(roomId)) throw new AuthError(404, `Không có phòng ${roomId}.`);
-      return { id: randomUUID(), userId, deviceId, roomId, canControl: !!p.canControl,
-        canChat: user.role !== 'guest' && !!p.canChat, createdAt: new Date() };
-    });
-    await this.permissions().delete({ userId });
-    if (rows.length) await this.permissions().insert(rows);
-    return rows;
-  }
-
-  private assertCanAssign(actor: AuthUser, role: Role) {
-    if (!ROLES.includes(role)) throw new AuthError(400, 'Vai trò không hợp lệ.');
-    if (role === 'owner') throw new AuthError(403, 'Hệ thống chỉ có một chủ nhà.');
-    if (actor.role === 'owner') return;
-    if (actor.role === 'admin' && (role === 'member' || role === 'guest')) return;
-    throw new AuthError(403, 'Bạn không có quyền gán vai trò này.');
-  }
-  private assertCanManage(actor: AuthUser, target: User) {
-    if (actor.role === 'owner') return;
-    if (actor.role === 'admin' && (target.role === 'member' || target.role === 'guest')) return;
-    throw new AuthError(403, 'Bạn không có quyền quản lý tài khoản này.');
+  /** Keeps at least one way in: the first account and your own account cannot be locked or deleted. */
+  private assertCanRemove(actor: AuthUser, target: User, verb: string) {
+    if (target.role === 'owner') throw new AuthError(403, `Không thể ${verb} tài khoản đầu tiên của hệ thống.`);
+    if (target.id === actor.id) throw new AuthError(403, `Không thể tự ${verb} tài khoản đang dùng.`);
   }
 
   private async insertUser(input: UserInput & { role: Role }): Promise<User> {
@@ -408,12 +363,9 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
       console.warn(`[Auth] Audit write failed: ${(error as Error).message}`);
     }
   }
-  async listAudit(user: AuthUser, limit = 100): Promise<AuditLog[]> {
+  async listAudit(_user: AuthUser, limit = 100): Promise<AuditLog[]> {
     await this.ready();
-    const admin = user.role === 'owner' || user.role === 'admin';
-    return this.audits().find({
-      where: admin ? {} : { userId: user.id }, order: { at: 'DESC' }, take: Math.min(Math.max(1, limit), 500),
-    });
+    return this.audits().find({ order: { at: 'DESC' }, take: Math.min(Math.max(1, limit), 500) });
   }
 
   // ---------------------------------------------------------------- helpers

@@ -33,7 +33,7 @@ Mỗi lượt hội thoại: nói một câu, dừng ~1 giây; hệ thống nh�
 | `scripts/fix-hotspot-firewall.ps1` | Mở TCP 3000, 3443 và UDP 5353 cho thiết bị trên Mobile Hotspot của Windows |
 | `models/` | Model đã chuyển đổi (tạo ra trên máy, không commit) |
 | `backend/data/` | Tài khoản (SQLite), khóa ký token, CA và chứng chỉ HTTPS (không commit, cần sao lưu) |
-| `backend/src/auth/`, `backend/src/network/` | Tài khoản và phân quyền; HTTPS nội bộ, mDNS, kênh live, PWA |
+| `backend/src/auth/`, `backend/src/network/` | Tài khoản (một loại) và chế độ khách; HTTPS nội bộ, mDNS, kênh live, PWA |
 
 ## 1. Cài đặt máy AI worker (Windows 10/11, làm một lần)
 
@@ -168,7 +168,7 @@ Local LLM ready; kept loaded for the demo.
 
 Cấp nguồn ESP32: log hiện `Device hello accepted: <MAC>`, OLED hiện `Listen` là có thể nói.
 
-**Lần đầu tiên:** mở `http://localhost:3000/dashboard` **trên chính máy AI worker** và tạo tài khoản **Chủ nhà** (chỉ làm được từ máy này, và chỉ khi chưa có tài khoản nào). Sau đó dùng khu "Người dùng & phân quyền" để tạo tài khoản cho người khác.
+**Lần đầu tiên:** mở `http://localhost:3000/dashboard` **trên chính máy AI worker** và tạo **tài khoản đầu tiên** (chỉ làm được từ máy này, và chỉ khi chưa có tài khoản nào). Sau đó dùng khu "Tài khoản" để tạo thêm tài khoản; người không đăng nhập vẫn xem được nhiệt độ, độ ẩm và trạng thái đèn.
 
 ### Kiểm tra máy AI worker đã giống hệ thống gốc
 
@@ -176,7 +176,7 @@ Cấp nguồn ESP32: log hiện `Device hello accepted: <MAC>`, OLED hiện `Lis
 | --- | --- |
 | `cd backend; npm.cmd test` | toàn bộ test `pass`, `fail 0` |
 | `http://localhost:3000/health` | `{"status":"ok",...}` |
-| `http://localhost:3000/dashboard` | đăng nhập chủ nhà, thấy ESP32 online, nhiệt độ/độ ẩm, nút bật/tắt LED |
+| `http://localhost:3000/dashboard` | chưa đăng nhập: thấy ESP32 online, nhiệt độ/độ ẩm, trạng thái đèn; đăng nhập: thêm nút bật/tắt LED, chat AI |
 | Nói "Bật đèn lên" | log `[Qwen] ... intent=led_on`, LED bật, ESP32 nói "Em đã bật đèn, đại ca." |
 | Nói "Một cộng một bằng mấy" | ESP32 trả lời "1 cộng 1 bằng 2" |
 
@@ -203,34 +203,36 @@ Ghi chú:
 
 ## Tài khoản và phân quyền
 
-Mọi API điều khiển, trang `/dashboard`, `/mobile` và broker MQTT đều yêu cầu đăng nhập; mỗi tài khoản chỉ thấy và điều khiển các thiết bị được cấp. Lệnh bằng **giọng nói** tại chỗ vẫn hoạt động không cần tài khoản (người nói ở trong phòng) và được ghi nhật ký với nguồn "Giọng nói".
+Chỉ có **một loại tài khoản** và **khách không cần tài khoản**:
 
-| Vai trò | Xem thiết bị | Điều khiển | Chat với AI | Quản lý người dùng | Thiết bị, phòng | Nhật ký |
-| --- | --- | --- | --- | --- | --- | --- |
-| **Chủ nhà** (1 người) | tất cả | tất cả | tất cả | tất cả (trừ chính mình) | ✅ | tất cả |
-| **Quản trị** | tất cả | tất cả | tất cả | thành viên và khách | ✅ | tất cả |
-| **Thành viên** | được cấp | nếu được cấp | nếu được cấp | ❌ | ❌ | của mình |
-| **Khách** | được cấp | nếu được cấp | ❌ không bao giờ | ❌ | ❌ | của mình |
+| | Xem nhiệt độ, độ ẩm, trạng thái đèn | Bật/tắt đèn | Chat với AI | Tạo/khóa/xóa tài khoản | Đặt tên thiết bị, phòng | Nhật ký | MQTT |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Có tài khoản** | ✅ | ✅ mọi thiết bị | ✅ | ✅ | ✅ | ✅ tất cả | ✅ |
+| **Khách** (không đăng nhập) | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
-- Quyền cấp theo **từng thiết bị** hoặc **theo phòng** (mọi thiết bị trong phòng). ESP32 tự xuất hiện trong danh sách khi kết nối lần đầu; chủ nhà/quản trị đặt tên và gán phòng.
-- **Khách** luôn có hạn dùng (mặc định 24 giờ, gia hạn được); hết hạn thì không đăng nhập được.
-- Đăng nhập cấp **access token 15 phút** và **refresh token 30 ngày** (xoay vòng; dùng lại token cũ sẽ thu hồi cả phiên). Đổi mật khẩu, đổi vai trò hoặc khóa tài khoản làm mọi phiên cũ mất hiệu lực. Sai mật khẩu 5 lần trong 15 phút: khóa đăng nhập 5 phút.
+- Mở `/dashboard` (hoặc `/mobile`) là thấy ngay chế độ khách: tên thiết bị, online/offline, nhiệt độ, độ ẩm, đèn bật/tắt, cập nhật trực tiếp. Khách **không** thấy mã MAC, phòng, nhật ký hay danh sách tài khoản. Bấm **🔑 Đăng nhập** để điều khiển.
+- Tài khoản đầu tiên tạo trên máy chạy backend. Sau đó **tài khoản nào cũng tạo thêm được tài khoản** (khu "Tài khoản" trên dashboard), và tài khoản mới có đúng quyền như tài khoản tạo ra nó.
+- Để không ai bị khóa ngoài hệ thống: **tài khoản đầu tiên** không thể bị khóa hoặc xóa, và chỉ chính nó đổi được mật khẩu của nó; không ai tự khóa hay tự xóa tài khoản mình đang dùng. Các tài khoản khác đặt lại mật khẩu cho nhau được.
+- Tài khoản "Thành viên"/"Khách" từ bản cũ được tự chuyển thành tài khoản đầy đủ khi khởi động (quyền theo thiết bị cũ bị bỏ; các phiên đăng nhập cũ phải đăng nhập lại).
+- Lệnh bằng **giọng nói** tại chỗ vẫn hoạt động không cần tài khoản (người nói ở trong phòng) và được ghi nhật ký với nguồn "Giọng nói".
+- Đăng nhập cấp **access token 15 phút** và **refresh token 30 ngày** (xoay vòng; dùng lại token cũ sẽ thu hồi cả phiên). Đổi mật khẩu hoặc khóa tài khoản làm mọi phiên cũ mất hiệu lực. Sai mật khẩu 5 lần trong 15 phút: khóa đăng nhập 5 phút.
 - Mật khẩu băm bằng scrypt; dữ liệu nằm trong `backend/data/aiot.sqlite` (hoặc PostgreSQL nếu đặt `DATABASE_URL`), khóa ký token trong `backend/data/auth-secret`. **Sao lưu thư mục `backend/data/`**, không commit nó (đã có trong `.gitignore`).
-- **MQTT:** đăng nhập bằng cùng tên/mật khẩu. Thành viên dùng topic theo thiết bị `aiot/device/<MAC>/led/set`, `aiot/device/<MAC>/command`, `aiot/device/<MAC>/sensor`…; topic tổng hợp (`aiot/sensor`, `aiot/#`) chỉ dành cho chủ nhà/quản trị. Lệnh không có quyền bị bỏ qua (không ngắt kết nối) và ghi nhật ký "Bị từ chối".
+- **MQTT:** đăng nhập bằng cùng tên/mật khẩu; mọi tài khoản dùng được mọi topic (`aiot/#`, `aiot/device/<MAC>/led/set`, `.../command`…). Không có tài khoản thì broker từ chối. Topic dữ liệu (`.../sensor`, `.../state`) chỉ backend được gửi: gói giả mạo bị bỏ (không ngắt kết nối) và ghi nhật ký "Bị từ chối".
 - **Nhật ký** ghi: ai, lúc nào, nguồn (Web, App, Giọng nói, MQTT), thao tác, thiết bị, kết quả.
-- Quên mật khẩu chủ nhà: dừng backend, đổi tên `backend/data/aiot.sqlite` (dữ liệu cũ được giữ lại để tra cứu), khởi động lại và tạo chủ nhà mới.
+- Quên mật khẩu tài khoản đầu tiên: dừng backend, đổi tên `backend/data/aiot.sqlite` (dữ liệu cũ được giữ lại để tra cứu), khởi động lại và tạo tài khoản mới.
 
 API chính (gửi `Authorization: Bearer <accessToken>`; app di động gửi thêm `X-Client: app`):
 
-| API | Quyền |
+| API | Ai dùng được |
 | --- | --- |
+| `GET /api/public/devices` | khách (tên, online, nhiệt độ, độ ẩm, trạng thái đèn; không có MAC) |
 | `GET /api/auth/status`, `POST /api/auth/login`, `/refresh`, `/logout` | công khai |
 | `POST /api/auth/setup` | chỉ từ máy chạy backend, khi chưa có tài khoản |
-| `GET /api/auth/me`, `POST /api/auth/password`, `GET /api/devices`, `GET /api/rooms` | đã đăng nhập |
-| `POST /api/devices/:id/led` · `POST /api/devices/:id/text` | quyền điều khiển · quyền chat trên thiết bị |
-| `GET/POST /api/users`, `PATCH/DELETE /api/users/:id`, `PUT /api/users/:id/permissions` | chủ nhà/quản trị |
-| `PATCH /api/devices/:id`, `POST/DELETE /api/rooms` | chủ nhà/quản trị |
-| `GET /api/audit` | đã đăng nhập (người thường chỉ thấy của mình) |
+| `GET /api/auth/me`, `POST /api/auth/password`, `GET /api/devices`, `GET /api/rooms` | có tài khoản |
+| `POST /api/devices/:id/led` · `POST /api/devices/:id/text` | có tài khoản |
+| `GET/POST /api/users`, `PATCH/DELETE /api/users/:id` | có tài khoản |
+| `PATCH /api/devices/:id`, `POST/DELETE /api/rooms`, `GET /api/audit` | có tài khoản |
+| WebSocket `/api/live` | gửi `{"type":"auth","token":…}` (đầy đủ) hoặc `{"type":"guest"}` (chế độ khách) |
 
 Trình duyệt trên máy khác dùng HTTPS nội bộ (cổng 3443, xem mục Dùng trên điện thoại). Trước khi mở ra Internet cần thêm giai đoạn 3 (đường hầm bảo mật, tên miền).
 
@@ -284,7 +286,7 @@ Các module và ESP32 phải nối chung GND.
   - `aiot/device/<MAC>/led/set`: gửi `on`/`off`.
   - `aiot/device/<MAC>/command`: `{"action":"led","state":"on"}` hoặc `{"action":"text","text":"Nhiệt độ phòng?"}`.
   - `aiot/device/<MAC>/sensor`, `.../state`, `.../chat`: nhận cảm biến, trạng thái, hội thoại.
-  - Thử nhanh (tài khoản chủ nhà/quản trị): `$env:MQTT_USER='...'; $env:MQTT_PASS='...'; node backend/scripts/mqtt-client-demo.js [on|off|ask|monitor]`.
+  - Thử nhanh (bằng một tài khoản bất kỳ): `$env:MQTT_USER='...'; $env:MQTT_PASS='...'; node backend/scripts/mqtt-client-demo.js [on|off|ask|monitor]`.
   - Broker ngoài (`MQTT_BROKER_URL`) không được backend kiểm soát quyền; hãy cấu hình quyền trên broker đó.
 
 ## 6. Xử lý sự cố

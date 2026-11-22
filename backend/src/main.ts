@@ -143,6 +143,12 @@ class HealthController {
     };
   }
 
+  /** Visitors without an account: only temperature, humidity and LED state (read-only). */
+  @Get('api/public/devices')
+  async publicDevices() {
+    return { devices: await this.devicesView.publicDevices() };
+  }
+
   /** Live devices the user may see, with names/rooms and what the user may do on each. */
   @Get(['api/devices', 'api/dashboard/devices', 'api/mobile/devices'])
   @Require('authenticated')

@@ -279,16 +279,10 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
     }, () => deny('lỗi kiểm tra quyền'));
   }
 
-  /** Users may follow their own devices; aggregate topics and wildcards are for owner/admin. */
+  /** Single account type: any signed-in account may follow every topic; anonymous clients never get here. */
   private authorizeSubscribe(client: any, subscription: any, callback: (error: Error | null, subscription?: any) => void) {
-    if (client?.aiotInternal) return callback(null, subscription);
-    const user: AuthUser | undefined = client?.aiotUser;
-    const topic = String(subscription?.topic || '');
-    if (!user) return callback(null, null);
-    if (user.role === 'owner' || user.role === 'admin') return callback(null, subscription);
-    const match = /^aiot\/device\/([^/+#]+)\/[^#+]*[^/]$/.exec(topic) || /^aiot\/device\/([^/+#]+)\/#$/.exec(topic);
-    if (!match) return callback(null, null);
-    this.auth!.can(user, 'device:view', match[1]).then(ok => callback(null, ok ? subscription : null), () => callback(null, null));
+    if (client?.aiotInternal || client?.aiotUser) return callback(null, subscription);
+    callback(null, null);
   }
 
   private resolveDeviceId(topic: string): string | undefined {

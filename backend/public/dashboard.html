@@ -136,9 +136,6 @@
     .form-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-top: 12px; }
     .field { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 10px; }
     .field input, .field select { padding: 8px 9px; border: 1px solid #cbd5dd; border-radius: 6px; background: #fff; color: #253341; font: inherit; font-size: 12px; }
-    .perm-panel { margin-top: 6px; padding: 10px; border: 1px solid #e1e6eb; border-radius: 8px; background: #fafbfc; }
-    .perm-row { display: grid; grid-template-columns: 1fr repeat(3, auto); gap: 12px; align-items: center; padding: 4px 0; font-size: 11px; }
-    .perm-row label { display: flex; align-items: center; gap: 4px; color: #4a5866; }
     .overlay { position: fixed; inset: 0; z-index: 10; display: none; place-items: center; padding: 16px; background: #1f2d3acc; }
     .overlay.show { display: grid; }
     .login-card { width: min(380px, 100%); padding: 24px; border-radius: 12px; background: #fff; box-shadow: 0 10px 40px #0004; }
@@ -172,16 +169,16 @@
         <div class="brand-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 3v2m0 14v2M3 12h2m14 0h2M5.64 5.64l1.42 1.42m9.88 9.88 1.42 1.42m0-12.72-1.42 1.42m-9.88 9.88-1.42 1.42" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="12" r="5" stroke="currentColor" stroke-width="1.6"/></svg></div>
         <div><div class="brand-name">AIOT CONTROL DESK</div><div class="brand-sub">Bảng điều khiển hệ thống phòng</div></div>
       </div>
-      <div class="top-right"><button id="installBtn" class="install-btn" type="button" hidden>⬇ Cài ứng dụng</button><div id="connection" class="connection"><span class="dot"></span><span id="connectionText">Đang kết nối backend</span></div><div id="userChip" class="user-chip" hidden><span id="userName"></span><button id="logoutBtn" class="link-btn" type="button">Đăng xuất</button></div></div>
+      <div class="top-right"><button id="installBtn" class="install-btn" type="button" hidden>⬇ Cài ứng dụng</button><div id="connection" class="connection"><span class="dot"></span><span id="connectionText">Đang kết nối backend</span></div><button id="loginBtn" class="install-btn" type="button" hidden>🔑 Đăng nhập</button><div id="userChip" class="user-chip" hidden><span id="userName"></span><button id="logoutBtn" class="link-btn" type="button">Đăng xuất</button></div></div>
     </header>
 
     <div id="secureBanner" class="secure-banner" hidden>⚠ Kết nối này chưa mã hóa: mật khẩu có thể bị đọc trên mạng Wi-Fi. <a href="/trust">Cài chứng chỉ và mở bằng HTTPS</a> (cũng cần để cài dashboard thành ứng dụng).</div>
     <section class="intro">
-      <div><div class="eyebrow">Bảng điều khiển thiết bị</div><h1>Phòng của đại ca.</h1><p>Theo dõi cảm biến và điều khiển các thiết bị tài khoản của bạn được phép dùng.</p></div>
+      <div><div class="eyebrow">Bảng điều khiển thiết bị</div><h1>Phòng của đại ca.</h1><p id="introText">Theo dõi nhiệt độ, độ ẩm và đèn trong phòng.</p></div>
       <select id="deviceSelect" class="device-select" aria-label="Chọn thiết bị" hidden></select>
     </section>
 
-    <div id="empty" class="empty" hidden>Chưa có thiết bị nào cho tài khoản này.<br>Nếu bạn là chủ nhà: kiểm tra ESP32 đã kết nối. Nếu không: nhờ chủ nhà hoặc quản trị cấp quyền.</div>
+    <div id="empty" class="empty" hidden>Chưa có thiết bị nào.<br>ESP32 sẽ tự xuất hiện khi kết nối tới backend lần đầu.</div>
     <section id="dashboard" class="grid" hidden>
       <article class="card">
         <div class="card-head"><div class="card-title">Môi trường trong phòng</div><div class="card-note" id="sensorUpdated">Đang chờ dữ liệu cảm biến</div></div>
@@ -194,7 +191,8 @@
       <article class="card led-card">
         <div class="card-head"><div class="card-title">LED WS2812B</div><div class="card-note" id="deviceState">ESP32</div></div>
         <div class="led-state"><div id="bulb" class="bulb"><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M9 18h6m-5 3h4m-2-19a7 7 0 0 0-4 12.75c.54.38 1 1.11 1 1.75h6c0-.64.46-1.37 1-1.75A7 7 0 0 0 12 2Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div><div class="led-label" id="ledLabel">Đang xác nhận trạng thái</div><div class="led-caption" id="ledCaption">Đang chờ trạng thái phần mềm do ESP32 báo</div></div></div>
-        <div class="led-actions"><button class="action" id="turnOn" data-enabled="true"><span>☼</span>Bật đèn</button><button class="action" id="turnOff" data-enabled="false"><span>◐</span>Tắt đèn</button></div>
+        <div class="led-actions" id="ledActions"><button class="action" id="turnOn" data-enabled="true"><span>☼</span>Bật đèn</button><button class="action" id="turnOff" data-enabled="false"><span>◐</span>Tắt đèn</button></div>
+        <button class="action" id="guestLogin" type="button" hidden style="width:100%">🔑 Đăng nhập để bật / tắt đèn</button>
         <div id="busyLabel" class="busy-label"></div>
       </article>
     </section>
@@ -210,11 +208,11 @@
       <article class="card"><div class="card-head"><div class="card-title">Thiết bị</div><div class="card-note">Trạng thái trực tiếp</div></div><div id="deviceDetails"></div></article>
       <article class="card"><div class="card-head"><div class="card-title">Hoạt động gần đây</div><div class="card-note">Phiên hiện tại</div></div><div class="activity" id="activity"><div class="card-note" style="padding:16px 0">Chưa có hoạt động.</div></div></article>
     </section>
-        <!-- Owner/admin: accounts, permissions, devices, rooms -->
+    <!-- Signed-in accounts: accounts, devices, rooms -->
     <section id="adminSection" class="admin-section" hidden>
       <article class="card">
-        <div class="card-head"><div class="card-title">Người dùng &amp; phân quyền</div><div class="card-note">Chủ nhà quản lý tất cả · Quản trị quản lý thành viên và khách</div></div>
-        <div class="table-wrap"><table class="data"><thead><tr><th>Tài khoản</th><th>Vai trò</th><th>Trạng thái</th><th>Quyền thiết bị</th><th></th></tr></thead><tbody id="userRows"></tbody></table></div>
+        <div class="card-head"><div class="card-title">Tài khoản</div><div class="card-note">Mọi tài khoản đều điều khiển được thiết bị và tạo thêm tài khoản · Người chưa đăng nhập chỉ xem nhiệt độ, độ ẩm, trạng thái đèn</div></div>
+        <div class="table-wrap"><table class="data"><thead><tr><th>Tài khoản</th><th>Trạng thái</th><th>Tạo lúc</th><th></th></tr></thead><tbody id="userRows"></tbody></table></div>
         <form id="createUserForm">
           <div class="form-row">
             <label class="field">Tên đăng nhập<input name="username" required minlength="3" maxlength="32" pattern="[a-zA-Z0-9._\-]+" autocomplete="off"></label>
@@ -222,9 +220,7 @@
             <label class="field">Mật khẩu (≥ 8 ký tự)<input name="password" type="password" required minlength="8" maxlength="128" autocomplete="new-password"></label>
           </div>
           <div class="form-row">
-            <label class="field">Vai trò<select name="role" id="newRole"><option value="member">Thành viên</option><option value="guest">Khách (có hạn)</option></select></label>
-            <label class="field">Hết hạn (bỏ trống: khách 24 giờ)<input name="expiresAt" type="datetime-local"></label>
-            <label class="field">&nbsp;<button class="action" type="submit">+ Thêm người dùng</button></label>
+            <label class="field">&nbsp;<button class="action" type="submit">+ Thêm tài khoản</button></label>
           </div>
         </form>
       </article>
@@ -234,7 +230,7 @@
           <div class="table-wrap"><table class="data"><thead><tr><th>Thiết bị</th><th>Tên</th><th>Phòng</th><th></th></tr></thead><tbody id="deviceRows"></tbody></table></div>
         </article>
         <article class="card">
-          <div class="card-head"><div class="card-title">Phòng</div><div class="card-note">Cấp quyền theo phòng = mọi thiết bị trong phòng</div></div>
+          <div class="card-head"><div class="card-title">Phòng</div><div class="card-note">Nhóm thiết bị theo phòng</div></div>
           <div class="table-wrap"><table class="data"><tbody id="roomRows"></tbody></table></div>
           <form id="createRoomForm" class="form-row" style="grid-template-columns: 2fr 1fr">
             <label class="field">Tên phòng mới<input name="name" required maxlength="120"></label>
@@ -244,7 +240,7 @@
       </div>
     </section>
 
-    <!-- Everyone: audit trail (admins see all, others their own) and password -->
+    <!-- Signed-in accounts: audit trail and password -->
     <section id="accountSection" class="admin-grid" hidden>
       <article class="card">
         <div class="card-head"><div class="card-title">Nhật ký hoạt động</div><div class="card-note" id="auditScope">50 mục gần nhất</div></div>
@@ -259,29 +255,29 @@
         </form>
       </article>
     </section>
-    <footer class="footer"><span>AIoT dashboard · mọi thao tác được kiểm tra quyền và ghi nhật ký</span><span><span id="liveDot" class="live-dot" title="Kênh cập nhật trực tiếp"></span><span id="lastRefresh">Đang tải dữ liệu…</span></span></footer>
+    <footer class="footer"><span>AIoT dashboard · thao tác điều khiển cần đăng nhập và được ghi nhật ký</span><span><span id="liveDot" class="live-dot" title="Kênh cập nhật trực tiếp"></span><span id="lastRefresh">Đang tải dữ liệu…</span></span></footer>
   </main>
   <div id="loginOverlay" class="overlay" role="dialog" aria-modal="true" aria-labelledby="loginTitle">
     <form id="loginForm" class="login-card" autocomplete="on">
       <h2 id="loginTitle">Đăng nhập</h2>
-      <p id="loginHint">Dùng tài khoản do chủ nhà hoặc quản trị viên cấp.</p>
+      <p id="loginHint">Đăng nhập để điều khiển thiết bị và quản lý tài khoản.</p>
       <label class="field" id="displayNameField" hidden>Tên hiển thị<input id="loginDisplayName" maxlength="120" value="Chủ nhà"></label>
       <label class="field">Tên đăng nhập<input id="loginUser" required minlength="3" maxlength="32" autocomplete="username" autocapitalize="none"></label>
       <label class="field">Mật khẩu<input id="loginPass" type="password" required maxlength="128" autocomplete="current-password"></label>
       <div class="login-error" id="loginError"></div>
       <button id="loginButton" class="send-button" type="submit" style="width:100%; min-height:42px">Đăng nhập</button>
+      <button id="loginCancel" class="link-btn" type="button" style="display:block; margin:12px auto 0">Chỉ xem, không đăng nhập</button>
     </form>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script>
     const state = { devices: [], selected: '', busy: false, chatSending: false, events: [], polling: false, chat: [], sensorHistory: Object.create(null),
-      session: null, setupRequired: false, users: [], rooms: [], openPerms: null, adminLoaded: 0 };
+      session: null, setupRequired: false, users: [], rooms: [], adminLoaded: 0 };
     const $ = id => document.getElementById(id);
     const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-    const ROLE = { owner: 'Chủ nhà', admin: 'Quản trị', member: 'Thành viên', guest: 'Khách' };
     const SOURCE = { web: 'Web', app: 'App', voice: 'Giọng nói', mqtt: 'MQTT', system: 'Hệ thống' };
-    const isAdmin = () => ['owner', 'admin'].includes(state.session?.user?.role);
+    const signedIn = () => !!state.session;
     function note(message, error = false) {
       const toast = $('toast'); toast.textContent = message; toast.classList.toggle('error', error); toast.classList.add('show');
       clearTimeout(note.timer); note.timer = setTimeout(() => toast.classList.remove('show'), 3200);
@@ -320,22 +316,29 @@
     }
     async function showLogin(message = '') {
       try { state.setupRequired = (await (await fetch('/api/auth/status', { cache: 'no-store' })).json()).setupRequired; } catch { }
-      $('loginTitle').textContent = state.setupRequired ? 'Tạo tài khoản chủ nhà' : 'Đăng nhập';
+      $('loginTitle').textContent = state.setupRequired ? 'Tạo tài khoản đầu tiên' : 'Đăng nhập';
       $('loginHint').textContent = state.setupRequired ?
-        'Lần đầu sử dụng: tạo tài khoản chủ nhà (toàn quyền). Chỉ làm được trên chính máy chạy backend (mở http://localhost:3000/dashboard).' :
-        'Dùng tài khoản do chủ nhà hoặc quản trị viên cấp.';
+        'Lần đầu sử dụng: tạo tài khoản đầu tiên. Chỉ làm được trên chính máy chạy backend (mở http://localhost:3000/dashboard). Sau đó tài khoản nào cũng tạo thêm được tài khoản.' :
+        'Đăng nhập để điều khiển thiết bị và quản lý tài khoản. Không đăng nhập vẫn xem được nhiệt độ, độ ẩm và trạng thái đèn.';
       $('displayNameField').hidden = !state.setupRequired;
       $('loginPass').autocomplete = state.setupRequired ? 'new-password' : 'current-password';
       $('loginPass').minLength = state.setupRequired ? 8 : 0;
-      $('loginButton').textContent = state.setupRequired ? 'Tạo chủ nhà và đăng nhập' : 'Đăng nhập';
+      $('loginButton').textContent = state.setupRequired ? 'Tạo tài khoản và đăng nhập' : 'Đăng nhập';
       $('loginError').textContent = message;
       $('loginOverlay').classList.add('show');
       setTimeout(() => $('loginUser').focus(), 50);
     }
     function signedOut(message) {
       disconnectLive();
-      clearSession(); state.devices = []; state.users = []; render([]); renderAccount(); showLogin(message);
+      clearSession(); state.users = []; renderAccount(); startGuest();
+      if (message) showLogin(message);
     }
+    /** Visitors: read-only view of temperature, humidity and LED state, no login needed. */
+    function startGuest() { state.adminLoaded = 0; refresh(); connectLive(); }
+    function hideLogin() { $('loginOverlay').classList.remove('show'); }
+    $('loginBtn').addEventListener('click', () => showLogin());
+    $('guestLogin').addEventListener('click', () => showLogin());
+    $('loginCancel').addEventListener('click', hideLogin);
     $('loginForm').addEventListener('submit', async event => {
       event.preventDefault();
       $('loginButton').disabled = true; $('loginError').textContent = '';
@@ -345,8 +348,9 @@
           { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
         const result = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(result.message || `Lỗi HTTP ${response.status}`);
-        saveSession(result); $('loginPass').value = ''; $('loginOverlay').classList.remove('show');
-        addEvent(`Đăng nhập: ${result.user.displayName} (${ROLE[result.user.role]})`, 'success');
+        disconnectLive();
+        saveSession(result); $('loginPass').value = ''; hideLogin();
+        addEvent(`Đăng nhập: ${result.user.displayName}`, 'success');
         renderAccount(); state.adminLoaded = 0; await refresh(); connectLive();
       } catch (error) { $('loginError').textContent = error.message; }
       finally { $('loginButton').disabled = false; }
@@ -359,12 +363,13 @@
     function renderAccount() {
       const user = state.session?.user;
       $('userChip').hidden = !user;
-      $('userName').innerHTML = user ? `${esc(user.displayName)} <span class="role-tag ${esc(user.role)}">${esc(ROLE[user.role])}</span>` : '';
-      $('adminSection').hidden = !isAdmin();
+      $('userName').textContent = user ? user.displayName : '';
+      $('loginBtn').hidden = !!user;
+      $('adminSection').hidden = !user;
       $('accountSection').hidden = !user;
-      $('auditScope').textContent = isAdmin() ? '50 mục gần nhất · tất cả người dùng' : '50 mục gần nhất · của bạn';
-      if (user?.role !== 'owner') $('newRole').querySelector('option[value="admin"]')?.remove();
-      else if (!$('newRole').querySelector('option[value="admin"]')) $('newRole').insertAdjacentHTML('beforeend', '<option value="admin">Quản trị</option>');
+      $('auditScope').textContent = '50 mục gần nhất · tất cả tài khoản';
+      $('introText').textContent = user ? 'Theo dõi cảm biến, bật/tắt đèn và trò chuyện với trợ lý AI.' :
+        'Bạn đang xem ở chế độ khách: nhiệt độ, độ ẩm và trạng thái đèn. Đăng nhập để điều khiển.';
     }
 
     // ---------------------------------------------------------------- devices (unchanged visuals)
@@ -426,14 +431,15 @@
       const selected = devices.find(device => device.id === state.selected);
       const connection = $('connection');
       connection.classList.toggle('online', Boolean(selected?.connected)); connection.classList.toggle('offline', !selected?.connected);
-      $('connectionText').textContent = !state.session ? 'Chưa đăng nhập' : selected?.connected ? 'ESP32 đang kết nối' : devices.length ? 'ESP32 ngoại tuyến' : 'Chưa có thiết bị';
-      $('empty').hidden = !state.session || devices.length > 0; $('dashboard').hidden = !selected; document.querySelector('.details').hidden = !selected;
-      $('chatCard').hidden = !selected;
+      $('connectionText').textContent = selected?.connected ? 'ESP32 đang kết nối' : devices.length ? 'ESP32 ngoại tuyến' : 'Chưa có thiết bị';
+      $('empty').hidden = devices.length > 0; $('dashboard').hidden = !selected; document.querySelector('.details').hidden = !selected;
+      $('chatCard').hidden = !selected || !signedIn();
+      $('ledActions').hidden = !signedIn(); $('guestLogin').hidden = signedIn();
       if (!selected) return;
       rememberSensor(selected);
       const led = selected.ledEnabled;
       $('ledLabel').textContent = led === undefined ? 'Chưa nhận trạng thái' : led ? 'LED đang bật' : 'LED đang tắt';
-      $('ledCaption').textContent = !selected.canControl ? 'Tài khoản của bạn chỉ được xem thiết bị này' :
+      $('ledCaption').textContent = !signedIn() ? 'Chế độ khách: chỉ xem trạng thái' :
         led === undefined ? 'Firmware chưa báo trạng thái; lệnh mới sẽ đồng bộ lại' : 'Trạng thái logic do ESP32 báo / xác nhận';
       $('bulb').classList.toggle('on', led === true);
       $('turnOn').classList.toggle('active', led === true); $('turnOff').classList.toggle('active', led === false);
@@ -456,16 +462,16 @@
       renderChart('temperatureChart', history, 'temperature', '°C');
       renderChart('humidityChart', history, 'humidity', '%');
       const room = state.rooms.find(r => r.id === selected.roomId);
-      $('deviceDetails').innerHTML = `<div class="detail-row"><span>Tên</span><span>${esc(selected.name || selected.id)}</span></div><div class="detail-row"><span>Mã thiết bị</span><span>${esc(selected.id)}</span></div><div class="detail-row"><span>Phòng</span><span>${esc(room?.name || '—')}</span></div><div class="detail-row"><span>WebSocket</span><span>${selected.connected ? 'Đã kết nối' : 'Mất kết nối'}</span></div><div class="detail-row"><span>Quyền của bạn</span><span>Xem${selected.canControl ? ' · Điều khiển' : ''}${selected.canChat ? ' · Chat AI' : ''}</span></div>${selected.connectedAt ? `<div class="detail-row"><span>Kết nối từ</span><span>${new Date(selected.connectedAt).toLocaleString('vi-VN')}</span></div>` : ''}`;
+      $('deviceDetails').innerHTML = `<div class="detail-row"><span>Tên</span><span>${esc(selected.name || selected.id)}</span></div>${signedIn() ? `<div class="detail-row"><span>Mã thiết bị</span><span>${esc(selected.id)}</span></div><div class="detail-row"><span>Phòng</span><span>${esc(room?.name || '—')}</span></div>` : ''}<div class="detail-row"><span>WebSocket</span><span>${selected.connected ? 'Đã kết nối' : 'Mất kết nối'}</span></div><div class="detail-row"><span>Bạn có thể</span><span>${signedIn() ? 'Xem · Điều khiển · Chat AI' : 'Chỉ xem (chưa đăng nhập)'}</span></div>${selected.connectedAt ? `<div class="detail-row"><span>Kết nối từ</span><span>${new Date(selected.connectedAt).toLocaleString('vi-VN')}</span></div>` : ''}`;
       if (oldSelected !== state.selected) addEvent(`Đang theo dõi thiết bị ${selected.name || selected.id}`);
     }
     // ---------------------------------------------------------------- live channel (/api/live)
     const live = { ws: null, ready: false, retry: 0, timer: null };
     function connectLive() {
-      if (!state.session || live.ws) return;
+      if (live.ws) return;
       const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/live`);
       live.ws = ws;
-      ws.onopen = () => ws.send(JSON.stringify({ type: 'auth', token: state.session?.accessToken }));
+      ws.onopen = () => ws.send(JSON.stringify(state.session ? { type: 'auth', token: state.session.accessToken } : { type: 'guest' }));
       ws.onmessage = async event => {
         let message; try { message = JSON.parse(event.data); } catch { return; }
         if (message.type === 'ready') { live.ready = true; live.retry = 0; $('liveDot').classList.add('on'); }
@@ -477,8 +483,7 @@
       };
       ws.onclose = event => {
         live.ws = null; live.ready = false; $('liveDot').classList.remove('on');
-        if (!state.session) return;
-        if (event.code === 4401) refreshSession();
+        if (event.code === 4401 && state.session) refreshSession();
         // Reconnect with backoff; polling keeps the page current meanwhile.
         clearTimeout(live.timer);
         live.timer = setTimeout(connectLive, Math.min(15000, 1000 * 2 ** live.retry++));
@@ -487,17 +492,15 @@
     function disconnectLive() { clearTimeout(live.timer); if (live.ws) { const ws = live.ws; live.ws = null; ws.onclose = null; ws.close(); } live.ready = false; $('liveDot').classList.remove('on'); }
 
     async function refresh() {
-      if (!state.session) return;
       // With the live channel up, only the slower account data needs a periodic reload.
-      if (live.ready) { if (Date.now() - state.adminLoaded > 10000) await loadAccountData(); return; }
+      if (live.ready) { if (state.session && Date.now() - state.adminLoaded > 10000) await loadAccountData(); return; }
       if (state.polling) return; state.polling = true;
       try {
-        const result = await request('/api/devices');
+        const result = await request(state.session ? '/api/devices' : '/api/public/devices');
         render(result.devices || []); $('lastRefresh').textContent = `Cập nhật lúc ${new Date().toLocaleTimeString('vi-VN')}`;
         state.errorShown = false;
-        if (Date.now() - state.adminLoaded > 10000) await loadAccountData();
+        if (state.session && Date.now() - state.adminLoaded > 10000) await loadAccountData();
       } catch (error) {
-        if (!state.session) return;
         $('connection').classList.remove('online'); $('connection').classList.add('offline'); $('connectionText').textContent = 'Backend chưa kết nối';
         $('lastRefresh').textContent = 'Không lấy được dữ liệu';
         if (!state.errorShown) { addEvent(`Không lấy được dữ liệu: ${error.message}`, 'error'); state.errorShown = true; }
@@ -524,7 +527,7 @@
       event.preventDefault();
       const selected = state.devices.find(device => device.id === state.selected);
       const text = $('chatInput').value.trim();
-      if (!selected || !selected.canChat || !text || state.chatSending || selected.busy) return;
+      if (!selected || !signedIn() || !text || state.chatSending || selected.busy) return;
       state.chat.push({ role: 'user', text });
       const pending = { role: 'assistant', text: 'Đang phân tích và gửi phản hồi tới ESP32…', pending: true };
       state.chat.push(pending); renderChat(); $('chatInput').value = ''; $('charCount').textContent = '0 / 400';
@@ -548,12 +551,12 @@
         const [audit, rooms] = await Promise.all([request('/api/audit?limit=50'), request('/api/rooms')]);
         state.rooms = rooms.rooms || [];
         renderAudit(audit.entries || []);
-        if (isAdmin()) {
+        if (signedIn()) {
           state.users = (await request('/api/users')).users || [];
           // Re-render only on real changes, and never while the admin is editing (it would
           // wipe ticked permission boxes or a device name being typed).
           const signature = JSON.stringify([state.users, state.rooms, state.devices.map(d => [d.id, d.name, d.roomId, d.connected])]);
-          const editing = state.openPerms || $('adminSection').contains(document.activeElement);
+          const editing = $('adminSection').contains(document.activeElement);
           if (force || (signature !== state.adminSignature && !editing)) { state.adminSignature = signature; renderAdmin(); }
         }
       } catch (error) { console.warn('account data', error); }
@@ -563,55 +566,23 @@
         '<tr><td colspan="5" class="card-note">Chưa có hoạt động.</td></tr>';
     }
     const allDevices = () => state.devices;
-    function permissionSummary(user) {
-      if (user.role === 'owner' || user.role === 'admin') return 'Toàn quyền';
-      if (!user.permissions.length) return '<span class="card-note">Chưa cấp</span>';
-      return user.permissions.map(p => {
-        const target = p.deviceId ? (allDevices().find(d => d.id === p.deviceId)?.name || p.deviceId) : `Phòng ${state.rooms.find(r => r.id === p.roomId)?.name || '?'}`;
-        return `${esc(target)}: xem${p.canControl ? '/điều khiển' : ''}${p.canChat ? '/chat' : ''}`;
-      }).join('<br>');
-    }
-    function canManage(user) {
-      const me = state.session?.user;
-      if (!me || user.role === 'owner') return false;
-      return me.role === 'owner' || (me.role === 'admin' && ['member', 'guest'].includes(user.role));
-    }
+    /** The first account and your own account cannot be locked or deleted (keeps a way in). */
+    const removable = user => user.role !== 'owner' && user.id !== state.session?.user?.id;
     function renderAdmin() {
       const me = state.session.user;
       $('userRows').innerHTML = state.users.map(user => {
-        const expired = user.expiresAt && new Date(user.expiresAt) <= new Date();
-        const status = !user.active ? 'Đã khóa' : expired ? 'Hết hạn' : user.expiresAt ? `Đến ${new Date(user.expiresAt).toLocaleString('vi-VN')}` : 'Hoạt động';
-        const manage = canManage(user);
-        const roleOptions = (me.role === 'owner' ? ['admin', 'member', 'guest'] : ['member', 'guest'])
-          .map(r => `<option value="${r}" ${r === user.role ? 'selected' : ''}>${ROLE[r]}</option>`).join('');
-        const actions = !manage ? '' : `<div class="actions-cell">
-          <select class="mini" data-act="role" data-id="${esc(user.id)}">${roleOptions}</select>
-          ${['member', 'guest'].includes(user.role) ? `<button class="mini" data-act="perms" data-id="${esc(user.id)}">Phân quyền</button>` : ''}
-          <button class="mini" data-act="toggle" data-id="${esc(user.id)}">${user.active ? 'Khóa' : 'Mở khóa'}</button>
-          <button class="mini" data-act="password" data-id="${esc(user.id)}">Đặt mật khẩu</button>
-          ${user.role === 'guest' ? `<button class="mini" data-act="extend" data-id="${esc(user.id)}">+24 giờ</button>` : ''}
-          <button class="mini danger" data-act="delete" data-id="${esc(user.id)}">Xóa</button></div>`;
-        const panel = state.openPerms === user.id ? `<tr><td colspan="5">${permissionEditor(user)}</td></tr>` : '';
-        return `<tr class="${!user.active || expired ? 'inactive' : ''}"><td><strong>${esc(user.displayName)}</strong><div class="card-note">${esc(user.username)}</div></td><td><span class="role-tag ${esc(user.role)}">${esc(ROLE[user.role])}</span></td><td>${esc(status)}</td><td>${permissionSummary(user)}</td><td>${actions}</td></tr>${panel}`;
+        const status = user.active ? 'Hoạt động' : 'Đã khóa';
+        const label = user.role === 'owner' ? ' <span class="role-tag owner">Tài khoản đầu tiên</span>' : user.id === me.id ? ' <span class="role-tag">Bạn</span>' : '';
+        const actions = `<div class="actions-cell">
+          ${removable(user) ? `<button class="mini" data-act="toggle" data-id="${esc(user.id)}">${user.active ? 'Khóa' : 'Mở khóa'}</button>` : ''}
+          ${user.role !== 'owner' && user.id !== me.id ? `<button class="mini" data-act="password" data-id="${esc(user.id)}">Đặt mật khẩu</button>` : ''}
+          ${removable(user) ? `<button class="mini danger" data-act="delete" data-id="${esc(user.id)}">Xóa</button>` : ''}</div>`;
+        return `<tr class="${!user.active ? 'inactive' : ''}"><td><strong>${esc(user.displayName)}</strong>${label}<div class="card-note">${esc(user.username)}</div></td><td>${esc(status)}</td><td>${new Date(user.createdAt).toLocaleString('vi-VN')}</td><td>${actions}</td></tr>`;
       }).join('');
       $('deviceRows').innerHTML = allDevices().map(d => `<tr><td>${d.connected ? '● ' : '○ '}${esc(d.id)}</td><td><input class="mini" style="width:100%" data-dev-name="${esc(d.id)}" value="${esc(d.name || '')}" maxlength="120"></td><td><select class="mini" data-dev-room="${esc(d.id)}"><option value="">—</option>${state.rooms.map(r => `<option value="${esc(r.id)}" ${r.id === d.roomId ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></td><td><button class="mini" data-act="save-device" data-id="${esc(d.id)}">Lưu</button></td></tr>`).join('') ||
         '<tr><td colspan="4" class="card-note">ESP32 sẽ tự xuất hiện khi kết nối lần đầu.</td></tr>';
       $('roomRows').innerHTML = state.rooms.map(r => `<tr><td>${esc(r.name)}</td><td class="card-note">${allDevices().filter(d => d.roomId === r.id).length} thiết bị</td><td><button class="mini danger" data-act="delete-room" data-id="${esc(r.id)}">Xóa</button></td></tr>`).join('') ||
         '<tr><td class="card-note">Chưa có phòng.</td></tr>';
-    }
-    function permissionEditor(user) {
-      const has = (key, id) => user.permissions.find(p => p[key] === id);
-      const row = (key, id, label) => {
-        const p = has(key, id);
-        return `<div class="perm-row" data-perm-key="${key}" data-perm-id="${esc(id)}"><span>${esc(label)}</span>
-          <label><input type="checkbox" data-perm="view" ${p ? 'checked' : ''}> Xem</label>
-          <label><input type="checkbox" data-perm="control" ${p?.canControl ? 'checked' : ''}> Điều khiển</label>
-          <label title="${user.role === 'guest' ? 'Khách không được chat với AI' : ''}"><input type="checkbox" data-perm="chat" ${p?.canChat ? 'checked' : ''} ${user.role === 'guest' ? 'disabled' : ''}> Chat AI</label></div>`;
-      };
-      return `<div class="perm-panel" data-perm-user="${esc(user.id)}"><div class="card-note">Cấp cho ${esc(user.displayName)} — theo thiết bị hoặc theo phòng:</div>
-        ${allDevices().map(d => row('deviceId', d.id, `Thiết bị: ${d.name || d.id}`)).join('')}
-        ${state.rooms.map(r => row('roomId', r.id, `Phòng: ${r.name}`)).join('')}
-        <div style="margin-top:8px"><button class="mini" data-act="save-perms" data-id="${esc(user.id)}">Lưu quyền</button> <button class="mini" data-act="perms" data-id="${esc(user.id)}">Đóng</button></div></div>`;
     }
     async function adminAction(fn, success) {
       // Reload the tables directly: refresh() skips while a background poll is in flight.
@@ -623,9 +594,7 @@
       if (!button) return;
       const { act, id } = button.dataset;
       const user = state.users.find(u => u.id === id);
-      if (act === 'perms') { state.openPerms = state.openPerms === id ? null : id; renderAdmin(); return; }
       if (act === 'toggle') return adminAction(() => request(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ active: !user.active }) }), user.active ? 'Đã khóa tài khoản.' : 'Đã mở khóa.');
-      if (act === 'extend') return adminAction(() => request(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ expiresAt: new Date(Math.max(Date.now(), new Date(user.expiresAt || 0).getTime()) + 24 * 3600e3).toISOString() }) }), 'Đã gia hạn thêm 24 giờ.');
       if (act === 'password') {
         const password = prompt(`Mật khẩu mới cho ${user.username} (≥ 8 ký tự):`);
         if (password) return adminAction(() => request(`/api/users/${id}`, { method: 'PATCH', body: JSON.stringify({ password }) }), 'Đã đặt mật khẩu mới; các phiên cũ bị đăng xuất.');
@@ -635,37 +604,21 @@
         if (confirm(`Xóa tài khoản ${user.username}? Thao tác không hoàn tác được.`)) return adminAction(() => request(`/api/users/${id}`, { method: 'DELETE' }), 'Đã xóa tài khoản.');
         return;
       }
-      if (act === 'save-perms') {
-        const panel = document.querySelector(`[data-perm-user="${CSS.escape(id)}"]`);
-        const permissions = [...panel.querySelectorAll('.perm-row')].flatMap(row => {
-          const get = name => row.querySelector(`[data-perm="${name}"]`).checked;
-          const control = get('control'), chat = get('chat');
-          if (!get('view') && !control && !chat) return [];
-          return [{ [row.dataset.permKey]: row.dataset.permId, canControl: control, canChat: chat }];
-        });
-        return adminAction(() => request(`/api/users/${id}/permissions`, { method: 'PUT', body: JSON.stringify({ permissions }) }), 'Đã lưu quyền.');
-      }
       if (act === 'save-device') {
         const name = document.querySelector(`[data-dev-name="${CSS.escape(id)}"]`).value;
         const roomId = document.querySelector(`[data-dev-room="${CSS.escape(id)}"]`).value || null;
         return adminAction(() => request(`/api/devices/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ name, roomId }) }), 'Đã lưu thiết bị.');
       }
       if (act === 'delete-room') {
-        if (confirm('Xóa phòng này? Thiết bị trong phòng sẽ không còn thuộc phòng nào và quyền theo phòng bị gỡ.')) return adminAction(() => request(`/api/rooms/${id}`, { method: 'DELETE' }), 'Đã xóa phòng.');
+        if (confirm('Xóa phòng này? Thiết bị trong phòng sẽ không còn thuộc phòng nào.')) return adminAction(() => request(`/api/rooms/${id}`, { method: 'DELETE' }), 'Đã xóa phòng.');
       }
-    });
-    document.addEventListener('change', event => {
-      const select = event.target.closest('select[data-act="role"]');
-      if (!select) return;
-      adminAction(() => request(`/api/users/${select.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ role: select.value }) }), 'Đã đổi vai trò; người dùng cần đăng nhập lại.');
     });
     $('createUserForm').addEventListener('submit', event => {
       event.preventDefault();
       const form = new FormData(event.target);
       const body = Object.fromEntries(form);
-      body.expiresAt = body.expiresAt ? new Date(body.expiresAt).toISOString() : null;
       if (!body.displayName) delete body.displayName;
-      adminAction(async () => { await request('/api/users', { method: 'POST', body: JSON.stringify(body) }); event.target.reset(); }, 'Đã thêm người dùng. Hãy cấp quyền thiết bị cho họ.');
+      adminAction(async () => { await request('/api/users', { method: 'POST', body: JSON.stringify(body) }); event.target.reset(); }, 'Đã thêm tài khoản. Tài khoản mới điều khiển được mọi thiết bị.');
     });
     $('createRoomForm').addEventListener('submit', event => {
       event.preventDefault();
@@ -685,7 +638,11 @@
 
     // ---------------------------------------------------------------- start
     renderAccount();
-    if (state.session) { refresh(); connectLive(); } else { render([]); showLogin(); }
+    render([]);
+    refresh(); connectLive();
+    // First run on the backend machine: offer to create the first account right away.
+    if (!state.session) fetch('/api/auth/status', { cache: 'no-store' }).then(r => r.json())
+      .then(status => { if (status.setupRequired && ['localhost', '127.0.0.1', '[::1]'].includes(location.hostname)) showLogin(); }).catch(() => {});
     setInterval(refresh, 2000);
 
     // ---------------------------------------------------------------- installable app (PWA)

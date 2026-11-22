@@ -52,7 +52,7 @@ Local LLM ready; kept loaded for the demo.
 **Bước 4. Kiểm tra**
 
 - `http://localhost:3000/health` → `{"status":"ok",...}`
-- `http://localhost:3000/dashboard` → đăng nhập (lần đầu: tạo tài khoản **Chủ nhà**, chỉ làm được trên máy này), thấy ESP32 online, nhiệt độ/độ ẩm, nút bật/tắt LED
+- `http://localhost:3000/dashboard` → chưa đăng nhập vẫn thấy ESP32 online, nhiệt độ/độ ẩm, trạng thái đèn; đăng nhập để bật/tắt LED và chat AI (lần đầu: tạo **tài khoản đầu tiên**, chỉ làm được trên máy này; sau đó tài khoản nào cũng tạo thêm được tài khoản)
 - Điện thoại cùng mạng: `http://<IP laptop>:3000/mobile`
 
 ## Dừng hệ thống

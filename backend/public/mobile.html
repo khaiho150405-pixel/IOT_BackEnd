@@ -583,7 +583,7 @@
 
       <div class="locked-notice" id="ledLockNotice">
         <span>🔒</span>
-        <span>Tài khoản của bạn chưa được cấp quyền điều khiển thiết bị này</span>
+        <span>Chế độ khách: chỉ xem trạng thái. Đăng nhập để bật / tắt đèn</span>
       </div>
     </div>
 
@@ -610,7 +610,7 @@
         </form>
         <div class="locked-notice" id="chatLockNotice">
           <span>🔒</span>
-          <span>Tài khoản của bạn chưa được cấp quyền trò chuyện / ra lệnh cho AI trên thiết bị này</span>
+          <span>Đăng nhập để trò chuyện / ra lệnh cho AI</span>
         </div>
       </div>
     </div>
@@ -656,7 +656,7 @@
           <strong>💡 Mẹo dùng trên điện thoại:</strong><br>
           - Bật/tắt đèn: Publish <code>on</code> / <code>off</code> tới <code>aiot/device/MAC/led/set</code><br>
           - Hỏi nhiệt độ / trò chuyện: Publish <code>{"action":"text","text":"Nhiệt độ phòng?"}</code> tới <code>aiot/device/MAC/command</code><br>
-          - Mỗi tài khoản chỉ thấy và điều khiển được thiết bị mình có quyền; lệnh không có quyền bị bỏ qua và ghi nhật ký.
+          - Đăng nhập MQTT bằng tên và mật khẩu tài khoản; mọi tài khoản điều khiển được mọi thiết bị, mọi lệnh được ghi nhật ký.
         </div>
       </div>
     </details>
@@ -684,7 +684,6 @@
     let devices = [];
     let activeDeviceId = null;
     let isBusy = false;
-    const ROLE_LABEL = { owner: ['👑', 'Chủ nhà'], admin: ['🛡️', 'Quản trị'], member: ['👤', 'Thành viên'], guest: ['🎫', 'Khách'] };
 
     function loadSession() {
       try { session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch { session = null; }
@@ -738,14 +737,13 @@
       if (!session) {
         roleBadge.className = 'role-badge guest';
         document.getElementById('roleIcon').innerText = '🔒';
-        document.getElementById('roleText').innerText = 'Chưa đăng nhập';
+        document.getElementById('roleText').innerText = 'Khách · chỉ xem';
         btn.className = 'btn-role-action';
         btn.innerText = '🔑 Đăng nhập';
       } else {
-        const [icon, label] = ROLE_LABEL[session.user.role] || ['👤', session.user.role];
-        roleBadge.className = 'role-badge ' + (['owner', 'admin'].includes(session.user.role) ? 'admin' : 'guest');
-        document.getElementById('roleIcon').innerText = icon;
-        document.getElementById('roleText').innerText = session.user.displayName + ' · ' + label;
+        roleBadge.className = 'role-badge admin';
+        document.getElementById('roleIcon').innerText = '👤';
+        document.getElementById('roleText').innerText = session.user.displayName;
         btn.className = 'btn-role-action logout';
         btn.innerText = 'Đăng xuất';
       }
@@ -754,7 +752,7 @@
       document.body.classList.toggle('no-control', !canControl);
       document.body.classList.toggle('no-chat', !canChat);
       document.getElementById('chatInput').placeholder = canChat ?
-        'Nhập câu lệnh hoặc trò chuyện với AI...' : '🔒 Tài khoản chưa có quyền trò chuyện với AI';
+        'Nhập câu lệnh hoặc trò chuyện với AI...' : '🔒 Đăng nhập để trò chuyện với AI';
     }
 
     function handleRoleClick() {
@@ -771,7 +769,8 @@
       clearSession();
       devices = []; activeDeviceId = null;
       renderDevice();
-      openLogin(message);
+      updateStatus();
+      if (message) openLogin(message);
     }
     async function logout() {
       if (!confirm('Đăng xuất khỏi tài khoản này?')) return;
@@ -794,7 +793,7 @@
         saveSession(await res.json());
         document.getElementById('loginPass').value = '';
         document.getElementById('loginModal').classList.remove('show');
-        appendChat('assistant', '🎉 Chào ' + session.user.displayName + '! Em đã mở các thiết bị đại ca được phép dùng.');
+        appendChat('assistant', '🎉 Chào ' + session.user.displayName + '! Đại ca đã điều khiển được thiết bị rồi ạ.');
         await updateStatus();
       } catch (ex) {
         err.innerText = ex.message || 'Đăng nhập không thành công.';
@@ -811,9 +810,9 @@
     });
 
     async function updateStatus() {
-      if (!session) return;
       try {
-        const res = await api('/api/devices');
+        // Visitors without an account get the read-only view (temperature, humidity, LED state).
+        const res = session ? await api('/api/devices') : await fetch('/api/public/devices', { cache: 'no-store' });
         if (!res.ok) throw new Error(await errorText(res));
         devices = (await res.json()).devices || [];
         if (!devices.some(d => d.id === activeDeviceId)) {
@@ -851,12 +850,12 @@
       const bulb = document.getElementById('phoneLampBulb');
       const glow = document.getElementById('phoneLampGlow');
       const statusTxt = document.getElementById('phoneLampStatusText');
-      document.querySelectorAll('.mqtt-mac').forEach(el => { el.textContent = device ? device.id : 'MAC'; });
+      document.querySelectorAll('.mqtt-mac').forEach(el => { el.textContent = device && session ? device.id : 'MAC'; });
 
       if (device && device.connected) {
         badge.className = 'status-badge';
         statusText.innerText = 'Trực tuyến';
-        macElem.innerText = (device.name || 'ESP32') + ' · ' + device.id;
+        macElem.innerText = session ? (device.name || 'ESP32') + ' · ' + device.id : (device.name || 'ESP32');
         if (device.sensor) {
           tempElem.innerText = device.sensor.temperature.toFixed(1).replace('.', ',') + '°C';
           humidElem.innerText = Math.round(device.sensor.humidity) + '%';
@@ -883,9 +882,8 @@
         }
       } else {
         badge.className = 'status-badge offline';
-        statusText.innerText = session ? 'Ngoại tuyến' : 'Chưa đăng nhập';
-        macElem.innerText = !session ? 'Đăng nhập để xem thiết bị' :
-          devices.length ? ((device && device.name) || 'ESP32') + ' mất kết nối' : 'Tài khoản chưa được cấp thiết bị nào';
+        statusText.innerText = 'Ngoại tuyến';
+        macElem.innerText = devices.length ? ((device && device.name) || 'ESP32') + ' mất kết nối' : 'Chưa có thiết bị nào kết nối';
         tempElem.innerText = '--.-°C';
         humidElem.innerText = '--%';
         ledToggle.disabled = true;
@@ -968,7 +966,7 @@
     loadSession();
     document.getElementById('mqttHost').innerText = window.location.hostname;
     renderDevice();
-    if (session) updateStatus(); else openLogin();
+    updateStatus();
     setInterval(updateStatus, 2000);
   </script>
 </body>

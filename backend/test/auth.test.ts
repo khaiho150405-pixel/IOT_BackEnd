@@ -34,56 +34,38 @@ test('passwords are salted scrypt hashes and JWTs reject tampering and expiry', 
   assert.equal(verifyJwt(signJwt({ sub: 'u1', role: 'member', tv: 0 }, 'x'.repeat(32), -1), 'x'.repeat(32)), undefined, 'expired');
 });
 
-test('setup creates exactly one owner; roles follow the management rules', async () => {
+test('one account type: every account controls all devices and can add accounts', async () => {
   const { auth, owner } = await fresh();
   assert.equal(await code(auth.setup({ username: 'second', password: 'second-pass-1' })), 409);
-  assert.equal(await code(auth.createUser(owner, { username: 'x-owner', password: 'password-123', role: 'owner' })), 403);
-  const admin = await auth.createUser(owner, { username: 'admin1', password: 'admin-pass-1', role: 'admin' });
-  const adminUser = await as(auth, 'admin1', 'admin-pass-1');
-  // Admins manage members/guests only.
-  assert.equal(await code(auth.createUser(adminUser, { username: 'admin2', password: 'admin-pass-2', role: 'admin' })), 403);
-  const member = await auth.createUser(adminUser, { username: 'member1', password: 'member-pass-1', role: 'member' });
-  assert.equal(member.role, 'member');
-  assert.equal(await code(auth.updateUser(adminUser, owner.id, { displayName: 'x' })), 403);
-  assert.equal(await code(auth.updateUser(adminUser, admin.id, { active: false })), 403);
-  // The owner can never be demoted, locked or deleted.
-  assert.equal(await code(auth.updateUser(owner, owner.id, { role: 'admin' })), 403);
+  await auth.touchDevice('desk'); await auth.touchDevice('hall');
+  // Whatever role is asked for, new accounts get the same full access and never expire.
+  const friend = await auth.createUser(owner, { username: 'friend', password: 'friend-pass-1', role: 'guest' as any });
+  assert.equal(friend.role, 'admin');
+  assert.equal(friend.expiresAt, null);
+  const f = await as(auth, 'friend', 'friend-pass-1');
+  for (const action of ['device:view', 'device:control', 'device:chat'] as const)
+    for (const device of ['desk', 'hall']) assert.ok(await auth.can(f, action, device), action + ' ' + device);
+  assert.deepEqual([...(await auth.deviceAccess(f)).keys()].sort(), ['desk', 'hall']);
+  // Accounts created by another account can create more accounts too.
+  const third = await auth.createUser(f, { username: 'third', password: 'third-pass-1' });
+  assert.equal(third.role, 'admin');
+  // Lock-out protection: the first account and your own account cannot be locked or deleted,
+  // and nobody else can change the first account's password.
+  assert.equal(await code(auth.updateUser(f, owner.id, { active: false })), 403);
+  assert.equal(await code(auth.deleteUser(f, owner.id)), 403);
+  assert.equal(await code(auth.updateUser(f, owner.id, { password: 'taken-over-1' })), 403);
+  assert.equal(await code(auth.deleteUser(f, f.id)), 403);
   assert.equal(await code(auth.updateUser(owner, owner.id, { active: false })), 403);
-  assert.equal(await code(auth.deleteUser(owner, owner.id)), 403);
+  assert.equal(await code(auth.updateUser(f, third.id, { password: 'third-pass-2' })), 0, 'others may reset each other');
+  assert.equal(await code(auth.deleteUser(f, third.id)), 0);
+  // Every account reads the whole audit log.
+  await auth.audit({ user: owner, source: 'web', action: 'led:on', deviceId: 'desk' });
+  assert.ok((await auth.listAudit(f)).some(e => e.username === 'owner'));
   // Input validation.
   assert.equal(await code(auth.createUser(owner, { username: 'ab', password: 'password-123' })), 400);
   assert.equal(await code(auth.createUser(owner, { username: 'shortpw', password: '123' })), 400);
-  assert.equal(await code(auth.createUser(owner, { username: 'member1', password: 'password-123' })), 409);
-  // Public objects never contain the password hash.
+  assert.equal(await code(auth.createUser(owner, { username: 'friend', password: 'password-123' })), 409);
   assert.ok((await auth.listUsers()).every(u => !('passwordHash' in u)));
-});
-
-test('members see only granted devices or rooms; guests expire and never chat', async () => {
-  const { auth, owner } = await fresh();
-  await auth.touchDevice('desk'); await auth.touchDevice('bed'); await auth.touchDevice('hall');
-  const bedroom = await auth.createRoom('Phòng ngủ');
-  await auth.updateDevice('bed', { roomId: bedroom.id });
-  const member = await auth.createUser(owner, { username: 'member1', password: 'member-pass-1' });
-  await auth.setPermissions(owner, member.id, [
-    { deviceId: 'desk', canControl: false, canChat: true },
-    { roomId: bedroom.id, canControl: true },
-  ]);
-  const m = await as(auth, 'member1', 'member-pass-1');
-  const access = await auth.deviceAccess(m);
-  assert.deepEqual([...access.keys()].sort(), ['bed', 'desk']);
-  assert.ok(await auth.can(m, 'device:control', 'bed'), 'room grant');
-  assert.ok(!await auth.can(m, 'device:control', 'desk'), 'view+chat only');
-  assert.ok(await auth.can(m, 'device:chat', 'desk'));
-  assert.ok(!await auth.can(m, 'device:view', 'hall'));
-  assert.ok(!await auth.can(m, 'user:manage'));
-
-  const guest = await auth.createUser(owner, { username: 'guest1', password: 'guest-pass-1', role: 'guest' });
-  assert.ok(guest.expiresAt && new Date(guest.expiresAt).getTime() > Date.now(), 'guests get a default expiry');
-  await auth.setPermissions(owner, guest.id, [{ deviceId: 'hall', canControl: true, canChat: true }]);
-  const g = await as(auth, 'guest1', 'guest-pass-1');
-  assert.ok(await auth.can(g, 'device:control', 'hall'));
-  assert.ok(!await auth.can(g, 'device:chat', 'hall'), 'guests never chat even if requested');
-  assert.equal(await code(auth.updateUser(owner, guest.id, { expiresAt: '2000-01-01T00:00:00Z' })), 400, 'expiry must be future');
 });
 
 test('tokens die with password change, deactivation and refresh reuse; logins lock after failures', async () => {
@@ -109,4 +91,15 @@ test('tokens die with password change, deactivation and refresh reuse; logins lo
   for (let i = 0; i < 5; i++) assert.equal(await code(auth.login('member1', 'nope-nope', '10.0.0.9')), i < 5 ? 401 : 429);
   assert.equal(await code(auth.login('member1', 'member-pass-2', '10.0.0.9')), 429, 'locked even with the right password');
   assert.equal(await code(auth.login('member1', 'member-pass-2', '10.0.0.10')), 0, 'other clients unaffected');
+});
+
+test('older member/guest accounts become full accounts on start-up', async () => {
+  const { auth } = await fresh();
+  const internal = auth as any;
+  await internal.insertUser({ username: 'oldguest', password: 'guest-pass-1', role: 'guest' });
+  const before = await auth.login('oldguest', 'guest-pass-1');
+  await internal.unifyAccounts();
+  const users = await auth.listUsers();
+  assert.equal(users.find(u => u.username === 'oldguest')?.role, 'admin');
+  assert.equal(await auth.authenticate(before.accessToken), undefined, 'old limited token no longer valid');
 });
