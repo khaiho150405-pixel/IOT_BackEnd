@@ -101,6 +101,21 @@ void loadConfig() {
   strlcpy(curToken, tk.c_str(), sizeof(curToken));
 }
 
+// Token typed on the setup page overrides WS_TOKEN from config.h until BOOT is held 3 s.
+void saveToken(const char *token) {
+  preferences.begin("aiot_net", false);
+  preferences.putString("token", token);
+  preferences.end();
+  strlcpy(curToken, token, sizeof(curToken));
+}
+
+void clearSavedToken() {
+  preferences.begin("aiot_net", false);
+  preferences.remove("token");
+  preferences.end();
+  strlcpy(curToken, WS_TOKEN, sizeof(curToken));
+}
+
 void saveConfig(const char *ssid, const char *pass, const char *host, uint16_t port) {
   preferences.begin("aiot_net", false);
   preferences.putString("ssid", ssid);
@@ -299,6 +314,9 @@ summary{padding:12px 14px;font-size:0.82rem;font-weight:600;cursor:pointer;color
       <input type="text" id="host" name="host" placeholder="IP Laptop (Để trống = 192.168.137.1)" value=")rawliteral";
   html += curHost;
   html += R"rawliteral(">
+      <input type="password" id="token" name="token" autocomplete="off" placeholder="Token thiết bị = DEVICE_TOKEN (trống = giữ nguyên, đang lưu )rawliteral";
+  html += String(strlen(curToken));
+  html += R"rawliteral( ký tự)">
       <button type="submit" class="btn-save">💾 Lưu & Kết nối lại</button>
     </form>
   </details>
@@ -371,6 +389,9 @@ void handleSave() {
   if (host.length() == 0) host = "192.168.137.1";
 
   saveConfig(ssid.c_str(), pass.c_str(), host.c_str(), port);
+  String token = configServer->arg("token");
+  token.trim();
+  if (token.length() >= 24 && token.length() < sizeof(curToken)) saveToken(token.c_str());
 
   String html = R"rawliteral(<!DOCTYPE html>
 <html lang="vi">
@@ -830,6 +851,7 @@ void networkTask(void *) {
       buttonWasDown = false;
       Serial.println("BOOT held 3s -> Reset config to default & restart");
       saveConfig(WIFI_SSID, WIFI_PASSWORD, WS_HOST, WS_PORT);
+      clearSavedToken();
       delay(500);
       ESP.restart();
     }
