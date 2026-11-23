@@ -23,3 +23,6 @@ fonts/
 scratch/
 __pycache__/
 *.py[cod]
+
+# Supervisor and tunnel logs (scripts/aiot-supervisor.ps1)
+logs/

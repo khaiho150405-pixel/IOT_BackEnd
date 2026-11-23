@@ -46,3 +46,6 @@ backend/scratch/
 scratch/
 .DS_Store
 Thumbs.db
+
+# Supervisor logs
+backend/logs/
