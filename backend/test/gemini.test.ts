@@ -314,3 +314,31 @@ test('requests are carried out: a clarifying reply is retried and wrapper questi
     (qwen.calls++, new Response(JSON.stringify({ message: { content: JSON.stringify({ intent: 'chat', reply: 'Dạ, em chào đại ca!', trackId: '' }) } })));
   assert.equal((await ai.analyze(Buffer.alloc(3200), undefined, [], [], signal)).reply, 'Dạ, em chào đại ca!');
 });
+
+test('assistant name is recognised at the start or end and removed from the request', () => {
+  const previous = process.env.WAKE_WORDS;
+  delete process.env.WAKE_WORDS; // default "trợ lý"
+  try {
+    const ai = new AiotService();
+    assert.deepEqual(ai.stripWakeWord('Trợ lý ơi, bật đèn lên'), { found: true, request: 'bật đèn lên' });
+    assert.deepEqual(ai.stripWakeWord('À trợ lí, nhiệt độ bao nhiêu?'), { found: true, request: 'nhiệt độ bao nhiêu?' });
+    assert.deepEqual(ai.stripWakeWord('Tắt đèn đi trợ lý ơi.'), { found: true, request: 'Tắt đèn đi' });
+    assert.deepEqual(ai.stripWakeWord('Trợ lý ơi'), { found: true, request: '' });
+    // Ways the recogniser mishears the name.
+    assert.deepEqual(ai.stripWakeWord('Chợ lý ơi, bật đèn'), { found: true, request: 'bật đèn' });
+    assert.deepEqual(ai.stripWakeWord('Trở lí ơi tắt đèn'), { found: true, request: 'tắt đèn' });
+    assert.deepEqual(ai.stripWakeWord('tro ly oi bat den'), { found: true, request: 'bat den' });
+    // Real PhoWhisper output: "ơi" heard as "hơi"/"rời".
+    assert.deepEqual(ai.stripWakeWord('Trợ lý hơi bật đèn lên.'), { found: true, request: 'bật đèn lên.' });
+    assert.deepEqual(ai.stripWakeWord('Trợ lý rời.'), { found: true, request: '' });
+    assert.deepEqual(ai.stripWakeWord('các đèn đi chợ lý hơi.'), { found: true, request: 'các đèn đi' });
+    assert.equal(ai.stripWakeWord('Tắt đèn đi ngủ thôi').found, false);
+    assert.equal(ai.stripWakeWord('Hôm nay trợ lý của sếp nghỉ ốm').found, false);
+    process.env.WAKE_WORDS = 'Bông, trợ lý';
+    assert.deepEqual(ai.stripWakeWord('Bông ơi bật đèn'), { found: true, request: 'bật đèn' });
+    process.env.WAKE_WORDS = '';
+    assert.equal(ai.wakeRequired(), false);
+  } finally {
+    if (previous === undefined) delete process.env.WAKE_WORDS; else process.env.WAKE_WORDS = previous;
+  }
+});

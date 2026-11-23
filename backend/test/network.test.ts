@@ -42,7 +42,7 @@ test('local HTTPS, certificate download, HTTPS redirect, PWA files and the live 
     env: { ...process.env, GEMINI_API_KEY: 'test-only-not-a-real-key', DEVICE_TOKEN: token, AI_PROVIDER: 'gemini',
       HOST: '127.0.0.1', PORT: String(port), HTTPS_PORT: String(httpsPort), TLS_DIR: tlsDir, MDNS_ENABLED: 'false',
       DATABASE_URL: '', AUTH_DB_FILE: ':memory:', AUTH_JWT_SECRET: '', OWNER_USERNAME: 'owner', OWNER_PASSWORD: 'owner-pass-123',
-      MQTT_ENABLED: 'false', FONT_DIR: '' },
+      MQTT_ENABLED: 'false', FONT_DIR: '', LIVE_MAX_GUESTS: '2' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';
@@ -156,6 +156,35 @@ test('local HTTPS, certificate download, HTTPS redirect, PWA files and the live 
   assert.ok(guestDevices.some((d: any) => d.connected && d.ledEnabled === true && !d.canControl));
   assert.ok(!JSON.stringify(guestUpdates).includes('live-dev'));
   guest.close();
+
+  // Visitors cannot take every live slot: with LIVE_MAX_GUESTS=2 the third visitor is turned
+  // away while an account still connects.
+  const openGuest = async () => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/live`);
+    await once(ws, 'open');
+    ws.send(JSON.stringify({ type: 'guest' }));
+    return ws;
+  };
+  await once(guest, 'close');
+  const g1 = await openGuest(), g2 = await openGuest(), g3 = await openGuest();
+  const [g3Code] = await once(g3, 'close');
+  assert.equal(g3Code, 1013, 'visitor quota reached');
+  const member = new WebSocket(`ws://127.0.0.1:${port}/api/live`);
+  await once(member, 'open');
+  member.send(JSON.stringify({ type: 'auth', token: accessToken }));
+  const [memberReady] = await once(member, 'message');
+  assert.equal(JSON.parse(memberReady.toString()).type, 'ready', 'accounts still get a slot');
+  g1.close(); g2.close(); member.close();
+
+  // First-account setup is refused through a tunnel (forwarded request from 127.0.0.1)
+  // and through a spoofed Host header; the LAN addresses are not shown to tunnel visitors.
+  const tunnelled = await fetch(`http://127.0.0.1:${port}/api/auth/setup`, { method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.9' },
+    body: JSON.stringify({ username: 'intruder', password: 'intruder-pass-1' }) });
+  assert.equal(tunnelled.status, 403);
+  const tunnelInfo = await (await fetch(`http://127.0.0.1:${port}/api/network`, { headers: { 'x-forwarded-for': '203.0.113.9' } })).json() as any;
+  assert.deepEqual(tunnelInfo.ips, []);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/health`)).headers.get('x-powered-by'), null);
 
   // Unknown WebSocket paths are refused instead of hanging.
   const stray = new WebSocket(`ws://127.0.0.1:${port}/nope`);

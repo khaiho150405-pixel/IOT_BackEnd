@@ -42,7 +42,11 @@ EDGE_BUDGET_S = float(os.environ.get("EDGE_TTS_BUDGET_S", "3"))
 # After a failed Edge render, skip Edge for this long: hammering a throttled
 # endpoint keeps it throttled and every reply would wait the full budget.
 EDGE_COOLDOWN_S = float(os.environ.get("EDGE_TTS_COOLDOWN_S", "300"))
+# Consecutive failures double the pause (5, 10, 20... min) up to this cap, so a broken
+# Edge endpoint does not add its ~3 s failure budget to a reply every few minutes.
+EDGE_COOLDOWN_MAX_S = float(os.environ.get("EDGE_TTS_COOLDOWN_MAX_S", "3600"))
 _edge_skip_until = 0.0
+_edge_failures = 0
 
 
 def split_for_tts(text: str, max_words: int = EDGE_MAX_CHUNK_WORDS) -> list[str]:
@@ -202,7 +206,7 @@ def render_windows_vietnamese(text: str) -> bytes:
 
 async def render_speech(text: str, voice: str, ffmpeg: str) -> tuple[bytes, str]:
     """Returns PCM16 and the engine name; only "edge" audio should be cached by callers."""
-    global _edge_skip_until
+    global _edge_skip_until, _edge_failures
 
     # 1. Edge TTS (natural neural voice), chunked with per-chunk retry
     if perf_counter() >= _edge_skip_until:
@@ -210,10 +214,13 @@ async def render_speech(text: str, voice: str, ffmpeg: str) -> tuple[bytes, str]
             started = perf_counter()
             pcm = await render_edge(text, voice, ffmpeg)
             print(f"[TTS] Edge-TTS ok ({len(split_for_tts(text))} chunks, {int((perf_counter() - started) * 1000)} ms)", flush=True)
+            _edge_failures = 0
             return pcm, "edge"
         except Exception as e:
-            _edge_skip_until = perf_counter() + EDGE_COOLDOWN_S
-            print(f"[TTS] Edge-TTS failed ({type(e).__name__}); using offline voice for {int(EDGE_COOLDOWN_S)} s", flush=True)
+            cooldown = min(EDGE_COOLDOWN_MAX_S, EDGE_COOLDOWN_S * (2 ** _edge_failures))
+            _edge_failures += 1
+            _edge_skip_until = perf_counter() + cooldown
+            print(f"[TTS] Edge-TTS failed ({type(e).__name__}); using offline voice for {int(cooldown)} s", flush=True)
 
     # 2. Offline Vietnamese Windows voice
     try:

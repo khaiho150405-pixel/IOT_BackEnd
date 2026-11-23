@@ -20,8 +20,51 @@ export function bearer(req: any): string | undefined {
   const header = String(req.headers?.authorization || '');
   return header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : undefined;
 }
+const LOOPBACK = new Set(['127.0.0.1', '::1']);
+const FORWARD_HEADERS = ['x-forwarded-for', 'forwarded', 'x-real-ip', 'cf-connecting-ip', 'true-client-ip'];
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+function socketIp(req: any): string {
+  return String(req.socket?.remoteAddress || req.connection?.remoteAddress || '').replace(/^::ffff:/, '');
+}
+/** True when a proxy or tunnel (cloudflared, ngrok, nginx…) forwarded the request. */
+export function isForwarded(req: any): boolean {
+  return FORWARD_HEADERS.some(h => req.headers?.[h] !== undefined);
+}
+
+/**
+ * Address of the real client. A tunnel on this machine (cloudflared, ngrok…) connects from
+ * 127.0.0.1, so every Internet visitor would look local and share one address (one visitor's
+ * wrong passwords would lock everybody out). For connections from this machine only, the
+ * address the tunnel reports is used: CF-Connecting-IP, else the LAST X-Forwarded-For entry
+ * (the one the proxy appended; earlier entries come from the visitor and can be forged).
+ * TRUST_PROXY=false turns this off.
+ */
 export function clientIp(req: any): string {
-  return String(req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+  const ip = socketIp(req);
+  if (process.env.TRUST_PROXY !== 'false' && LOOPBACK.has(ip)) {
+    const xff = String(req.headers?.['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean);
+    const forwarded = String(req.headers?.['cf-connecting-ip'] || xff.at(-1) || req.headers?.['x-real-ip'] || '')
+      .trim().replace(/^::ffff:/, '');
+    if (forwarded && /^[0-9a-f:.]{2,45}$/i.test(forwarded)) return forwarded;
+  }
+  return ip;
+}
+
+/**
+ * A request typed on this very machine: loopback socket, addressed to localhost, and not
+ * relayed by a proxy/tunnel. Used for first-account setup and to keep localhost on HTTP.
+ */
+export function isDirectLocal(req: any): boolean {
+  const host = String(req.headers?.host || '').toLowerCase().replace(/:\d+$/, '');
+  return LOOPBACK.has(socketIp(req)) && LOCAL_HOSTS.has(host) && !isForwarded(req);
+}
+
+/** Client on this machine or the same private network (not relayed from the Internet). */
+export function isPrivateClient(req: any): boolean {
+  if (isForwarded(req)) return false;
+  const ip = socketIp(req);
+  return LOOPBACK.has(ip) || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|f[cd][0-9a-f]{2}:|fe80:)/i.test(ip);
 }
 /** The future native app sends X-Client: app; everything else counts as web. */
 export function clientSource(req: any): AuditSource {

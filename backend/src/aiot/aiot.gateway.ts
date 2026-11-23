@@ -31,6 +31,9 @@ interface Session {
   textCount: number;
   alive: boolean;
   playback?: { id: string; resolve: () => void };
+  /** Until then a reply may follow without the assistant's name (conversation window). */
+  followUntil?: number;
+  followTimer?: NodeJS.Timeout;
 }
 
 export function authenticate(header: string | undefined, token: string): boolean {
@@ -104,6 +107,7 @@ export class AiotGateway implements OnModuleDestroy {
         }
       });
       ws.on('close', (code, reason) => {
+        this.stopFollowWindow(session);
         console.log(`WebSocket closed for ${session.id || peer}: ${code} ${reason.toString()}`);
         clearTimeout(session.readyTimer);
         session.controller?.abort();
@@ -115,6 +119,22 @@ export class AiotGateway implements OnModuleDestroy {
       });
       ws.on('error', () => ws.terminate());
     });
+  }
+
+  /** MIC_DEBUG=1: once per second, the microphone level the detector sees (compare with VAD_RMS). */
+  private micLevels = new WeakMap<Session, { start: number; energy: number; samples: number; peak: number }>();
+  private logMicLevel(s: Session, pcm: Buffer) {
+    let level = this.micLevels.get(s);
+    if (!level) this.micLevels.set(s, level = { start: Date.now(), energy: 0, samples: 0, peak: 0 });
+    for (let offset = 0; offset + 1 < pcm.length; offset += 2) {
+      const sample = pcm.readInt16LE(offset);
+      level.energy += sample * sample; level.samples++;
+      level.peak = Math.max(level.peak, Math.abs(sample));
+    }
+    if (Date.now() - level.start < 1000) return;
+    const rms = Math.round(Math.sqrt(level.energy / Math.max(1, level.samples)));
+    console.log(`Mic level ${s.id}: rms=${rms} peak=${level.peak} (VAD_RMS=${process.env.VAD_RMS || 500})`);
+    this.micLevels.set(s, { start: Date.now(), energy: 0, samples: 0, peak: 0 });
   }
 
   private send(session: Session, message: unknown) {
@@ -133,10 +153,13 @@ export class AiotGateway implements OnModuleDestroy {
     if (binary) {
       if (!s.id || !data.length || data.length % 2 || data.length > 4096) throw new Error('Invalid PCM');
       if (s.busy) return;
-      const utterance = s.detector.push(s.highPass.process(data));
+      const filtered = s.highPass.process(data);
+      if (process.env.MIC_DEBUG === '1') this.logMicLevel(s, filtered);
+      const utterance = s.detector.push(filtered);
       if (utterance) {
         // Set busy synchronously, before any await. One request at a time/device.
         s.busy = true; s.lastTurn = Date.now();
+        this.stopFollowWindow(s);
         let energy = 0, peak = 0;
         for (let offset = 0; offset < utterance.length; offset += 2) {
           const sample = utterance.readInt16LE(offset);
@@ -145,7 +168,10 @@ export class AiotGateway implements OnModuleDestroy {
         }
         const rms = Math.round(Math.sqrt(energy / (utterance.length / 2)));
         console.log(`Voice capture: duration=${Math.round(utterance.length / 32)}ms rms=${rms} peak=${peak} device=${s.id}`);
-        void this.processTurn(s, utterance);
+        // Speech that began inside the follow-up window needs no name ("Trợ lý ơi") again.
+        const spokeAt = Date.now() - utterance.length / 32;
+        const requireWake = !(s.followUntil && spokeAt <= s.followUntil);
+        void this.processTurn(s, utterance, undefined, requireWake);
       }
       return;
     }
@@ -174,7 +200,7 @@ export class AiotGateway implements OnModuleDestroy {
       console.log(`Device hello accepted: ${s.id}`);
       // Register new devices so owners/admins can name them and grant access.
       void this.auth?.touchDevice(s.id!).catch(error => console.warn(`Device registry failed: ${(error as Error).message}`));
-      this.send(s, { type: 'status', state: 'listening' });
+      this.sendListening(s);
       this.show(s, 'Dạ em chào đại ca!\nEm sẵn sàng rồi ạ.');
       this.mqtt?.publishState(s.id!, { connected: true, ledEnabled: s.ledEnabled, busy: false });
       return;
@@ -192,6 +218,10 @@ export class AiotGateway implements OnModuleDestroy {
         s.micSlot = message.mic_slot;
         console.log(`Device ${s.id} microphone slot ${message.mic_slot} (scores ${JSON.stringify(message.mic_scores)})`);
       }
+      // A slow firmware network loop delays LED acks, sensor reports and heartbeats.
+      if (Number.isFinite(message.loop_max_ms) &&
+          (message.loop_max_ms >= 300 || process.env.DEVICE_DEBUG === '1'))
+        console.warn(`Device ${s.id} loop ${message.loop_max_ms} ms (slowest: ${message.loop_slow || '?'}, rssi ${message.rssi} dBm, mic peak ${message.mic_peak_rms ?? '?'}, gate opens ${message.mic_gate_opens ?? '?'})`);
       const { temperature: t, humidity: h } = message;
       s.sensor = message.valid === true && Number.isFinite(t) && Number.isFinite(h) &&
         t >= -40 && t <= 80 && h >= 0 && h <= 100 ? { temperature: t, humidity: h, receivedAt: Date.now() } : undefined;
@@ -212,7 +242,7 @@ export class AiotGateway implements OnModuleDestroy {
       this.send(s, { type: 'audio_stop' });
       s.detector.reset();
       // processTurn's finally releases busy after the old work actually stops.
-      if (!s.busy) this.send(s, { type: 'status', state: 'listening' });
+      if (!s.busy) this.sendListening(s);
     } else if (message.type === 'error') {
       s.pending?.reject(new Error('Device rejected command'));
       if (['audio_buffer_full', 'playback_stalled'].includes(message.message)) s.controller?.abort();
@@ -254,7 +284,7 @@ export class AiotGateway implements OnModuleDestroy {
     } finally {
       session.detector.reset();
       session.busy = false;
-      if (session.ws.readyState === WebSocket.OPEN) this.send(session, { type: 'status', state: 'listening' });
+      if (session.ws.readyState === WebSocket.OPEN) this.sendListening(session);
     }
   }
 
@@ -266,20 +296,36 @@ export class AiotGateway implements OnModuleDestroy {
     }));
   }
 
+  /**
+   * Sends an LED command and waits for the device ACK. On/off is idempotent, so a command
+   * whose frame or ACK was delayed (Wi-Fi retry, busy device loop) is simply re-sent with the
+   * same id; the first matching ACK wins and later duplicates are ignored.
+   */
   private async command(s: Session, action: 'on' | 'off', signal: AbortSignal) {
     const id = randomUUID();
+    const started = performance.now();
+    const resendMs = Number(process.env.LED_ACK_RESEND_MS || 1500);
+    const timeoutMs = Number(process.env.LED_ACK_TIMEOUT_MS || 6000);
+    const message = { type: 'command', id, device: 'led', action };
+    let attempts = 1;
     await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => finish(new Error('LED acknowledgement timed out')), 3000);
+      const timer = setTimeout(() => finish(new Error('LED acknowledgement timed out')), timeoutMs);
+      const resend = setInterval(() => {
+        try { this.send(s, message); attempts++; } catch (error) { finish(error as Error); }
+      }, resendMs);
       const aborted = () => finish(new Error('Interrupted'));
       const finish = (error?: Error) => {
-        clearTimeout(timer); signal.removeEventListener('abort', aborted);
-        s.pending = undefined;
+        clearTimeout(timer); clearInterval(resend); signal.removeEventListener('abort', aborted);
+        if (s.pending?.id === id) s.pending = undefined;
+        const elapsed = Math.round(performance.now() - started);
+        if (error || elapsed > 1000 || process.env.DEVICE_DEBUG === '1')
+          console[error ? 'warn' : 'log'](`LED ${action} ${error ? 'failed' : 'ack'} after ${elapsed} ms (${attempts} send${attempts > 1 ? 's' : ''}) device=${s.id}`);
         error ? reject(error) : resolve();
       };
       s.pending = { id, action, resolve: () => finish(), reject: finish };
       signal.addEventListener('abort', aborted, { once: true });
       if (signal.aborted) { aborted(); return; }
-      try { this.send(s, { type: 'command', id, device: 'led', action }); }
+      try { this.send(s, message); }
       catch (error) { finish(error as Error); }
     });
   }
@@ -346,7 +392,7 @@ export class AiotGateway implements OnModuleDestroy {
   }
 
   private async processTurn(s: Session, input: Buffer | { text: string },
-    onReady?: (decision?: DecisionValue) => void): Promise<DecisionValue | undefined> {
+    onReady?: (decision?: DecisionValue) => void, requireWake = false): Promise<DecisionValue | undefined> {
     const controller = new AbortController();
     s.controller = controller;
     const signal = controller.signal;
@@ -384,11 +430,15 @@ export class AiotGateway implements OnModuleDestroy {
       const analysisSignal = AbortSignal.any([signal, AbortSignal.timeout(analysisTimeout)]);
       const availableTracks = tracks.map(({ id, title }) => ({ id, title }));
       const analysis = Buffer.isBuffer(input) ?
-        this.ai.analyze(input, s.sensor, recent, availableTracks, analysisSignal, s.ledEnabled) :
+        this.ai.analyze(input, s.sensor, recent, availableTracks, analysisSignal, s.ledEnabled, requireWake) :
         this.ai.analyzeText(input.text, s.sensor, recent, availableTracks, analysisSignal, s.ledEnabled);
       const decision = await this.wait(analysis, analysisSignal);
       signal.throwIfAborted();
-      if (decision.intent === 'ignore') return;
+      if (decision.intent === 'ignore') {
+        // Overheard talk without the assistant's name: put the idle screen back quietly.
+        if (requireWake && decision.transcript) this.show(s, 'Gọi "Trợ lý ơi"\nđể ra lệnh nhé.');
+        return;
+      }
       console.log(`[AI Decision] Transcript: "${decision.transcript}" | Intent: "${decision.intent}" | Reply: "${decision.reply}"`);
       if (process.env.DEMO_FAST_CONFIRMATIONS === 'true') {
         if (decision.intent === 'led_on') decision.reply = 'Em đã bật đèn, đại ca.';
@@ -474,15 +524,53 @@ export class AiotGateway implements OnModuleDestroy {
       if (s.ws.readyState === WebSocket.OPEN) {
         try {
           this.send(s, { type: 'audio_stop' });
-          this.send(s, { type: 'status', state: 'listening' });
+          // After an answer the user may go on talking without the name for a while.
+          if (readyReply) this.startFollowWindow(s);
+          this.sendListening(s);
         } catch { s.ws.close(1011, 'delivery failed'); }
       }
     }
     return readyReply;
   }
+  /**
+   * Opens the no-name-needed window (WAKE_FOLLOWUP_MS, default 10 s) and, when a name is
+   * required, counts it down on the OLED once per second; at zero the screen goes back to
+   * the "call my name" hint. A new turn (busy) or disconnect stops the countdown.
+   */
+  private wakeRequired(): boolean {
+    return typeof this.ai.wakeRequired === 'function' && this.ai.wakeRequired();
+  }
+  /**
+   * Tells the device it may record again, whether the assistant name is needed, and how long
+   * the no-name window still lasts: the OLED status bar counts it down ("NGHE LENH 9s").
+   */
+  private sendListening(s: Session) {
+    const followMs = s.followUntil ? Math.max(0, Math.round(s.followUntil - Date.now())) : 0;
+    this.send(s, { type: 'status', state: 'listening', wake: this.wakeRequired(), follow_ms: followMs });
+  }
+  /**
+   * Opens the no-name-needed window (WAKE_FOLLOWUP_MS, default 10 s). The device counts it
+   * down on its status bar; when it ends, the content area shows the "call my name" hint.
+   * A new turn (busy) or a disconnect cancels the end-of-window hint.
+   */
+  private startFollowWindow(s: Session) {
+    const windowMs = Number(process.env.WAKE_FOLLOWUP_MS || 10000);
+    clearTimeout(s.followTimer);
+    s.followUntil = Date.now() + windowMs;
+    if (!this.wakeRequired() || windowMs < 1000) return;
+    s.followTimer = setTimeout(() => {
+      s.followTimer = undefined;
+      if (s.busy || s.ws.readyState !== WebSocket.OPEN) return;
+      try { this.show(s, 'Gọi "Trợ lý ơi"\nđể ra lệnh nhé.'); } catch { /* device gone */ }
+    }, windowMs);
+  }
+  private stopFollowWindow(s: Session) {
+    clearTimeout(s.followTimer); s.followTimer = undefined;
+  }
+
   onModuleDestroy() {
     if (this.heartbeat) clearInterval(this.heartbeat);
-    for (const s of this.sessions) { s.controller?.abort(); s.ws.terminate(); }
+    for (const s of this.sessions) { this.stopFollowWindow(s); s.controller?.abort(); s.ws.terminate(); }
     this.server?.close();
   }
 }

@@ -31,6 +31,7 @@ export class AiotService implements OnModuleInit, OnModuleDestroy {
     'Em đang chậm phản hồi, đại ca nói lại giúp em nhé.',
     'Dạ em nghe rõ rồi đại ca.',
     'Dạ em nghe chưa rõ, đại ca nói lại giúp em nhé.',
+    'Dạ, em nghe đây đại ca.',
   ]);
   private speechCache = new Map<string, Buffer>();
   private speechPending = new Map<string, Promise<Buffer>>();
@@ -52,7 +53,7 @@ export class AiotService implements OnModuleInit, OnModuleDestroy {
         console.warn(`Local LLM warm-up skipped: ${(err as Error).message}. Ollama might be offline or still starting.`);
       }
     }
-    if (process.env.DEMO_FAST_CONFIRMATIONS !== 'true') return;
+    // Fixed confirmations are voiced once and kept on disk, so "bật/tắt đèn" answers instantly.
     for (const text of this.staticSpeech) {
       void this.speak(text, AbortSignal.timeout(30000)).then(() => console.log(`Prepared short voice: ${text}`))
         .catch(() => console.warn('Speech warm-up unavailable; will retry on request'));
@@ -131,10 +132,14 @@ export class AiotService implements OnModuleInit, OnModuleDestroy {
 
   private async warmLocalModel() {
     console.log(`Warming local LLM: ${this.localModel()}`);
+    // Warm up with the real intent prompt: Ollama keeps the evaluated prompt prefix, so the
+    // first spoken command skips ~1500 tokens of prompt processing (about 4 s on a GTX 1650).
     const response = await fetch(`${process.env.OLLAMA_URL || 'http://127.0.0.1:11434'}/api/chat`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: this.localModel(), messages: [{ role: 'user', content: 'Reply with the word ready.' }],
-        stream: false, keep_alive: -1, options: { temperature: 0, num_predict: 8 } }),
+      body: JSON.stringify({ model: this.localModel(), messages: [
+        { role: 'system', content: this.localIntentPrompt() },
+        { role: 'user', content: this.localTurnMessage('xin chào', null, undefined, []) },
+      ], format: this.localDecisionSchema(), stream: false, keep_alive: -1, options: { temperature: 0.1, num_predict: 8 } }),
       signal: AbortSignal.timeout(180000),
     });
     if (!response.ok) throw new Error(`Ollama HTTP ${response.status}; check the local model and Ollama service.`);
@@ -163,6 +168,17 @@ export class AiotService implements OnModuleInit, OnModuleDestroy {
 
   // Static so Ollama can reuse its prompt cache between turns (prompt evaluation
   // was ~3.4 s of each ~5 s turn); the per-turn room state goes in the user message.
+  private localDecisionSchema() {
+    return {
+      type: 'object',
+      properties: {
+        intent: { type: 'string', enum: ['chat', 'led_on', 'led_off', 'environment', 'music_play', 'music_stop'] },
+        reply: { type: 'string' },
+        trackId: { type: 'string' },
+      },
+      required: ['intent', 'reply', 'trackId'],
+    };
+  }
   private localIntentPrompt(): string {
     return `Bạn là bộ não của trợ lý giọng nói trong phòng thông minh. Mỗi lượt bạn nhận câu người dùng vừa nói (do máy nhận dạng giọng nói chuyển thành chữ nên có thể sai vài chữ) và trạng thái phòng. Hãy hiểu ý người dùng rồi trả về JSON.
 
@@ -543,15 +559,7 @@ TRẢ VỀ ĐỊNH DẠNG JSON THUẦN TÚY:
     }
     messages.push({ role: 'user', content: this.localTurnMessage(input, fresh, ledEnabled, tracks) });
 
-    const schema = {
-      type: 'object',
-      properties: {
-        intent: { type: 'string', enum: ['chat', 'led_on', 'led_off', 'environment', 'music_play', 'music_stop'] },
-        reply: { type: 'string' },
-        trackId: { type: 'string' },
-      },
-      required: ['intent', 'reply', 'trackId'],
-    };
+    const schema = this.localDecisionSchema();
 
     const askQwen = async (conversation: typeof messages): Promise<{ decision: DecisionValue; raw: string }> => {
       const response = await fetch(`${process.env.OLLAMA_URL || 'http://127.0.0.1:11434'}/api/chat`, {
@@ -612,11 +620,70 @@ TRẢ VỀ ĐỊNH DẠNG JSON THUẦN TÚY:
     if (!response.ok) throw new Error(`Gemini HTTP ${response.status}; check model, key and quota`);
     return response.json();
   }
+  /** Configured assistant names (WAKE_WORDS, comma separated; empty = always listening). */
+  private wakeWords(): string[][] {
+    return (process.env.WAKE_WORDS ?? 'trợ lý').split(',')
+      .map(word => this.wakeTokens(word).join(' ').split(' ').filter(Boolean)).filter(tokens => tokens.length);
+  }
+  private wakeTokens(text: string): string[] {
+    // Compared without tones/diacritics, with "y"="i", and with the initial consonants the
+    // recogniser confuses folded together (tr/ch, s/x, gi/r/d): "trợ lý", "chợ lý", "trở lí"
+    // and "tro li" all become "cho li".
+    return text.split(/\s+/).map(word => this.normalizeLocalInput(word).replace(/y/g, 'i')
+      .replace(/^tr/, 'ch').replace(/^s/, 'x').replace(/^(gi|r)/, 'd'));
+  }
+  wakeRequired(): boolean { return this.wakeWords().length > 0; }
+  /**
+   * Finds the assistant's name at the start ("Trợ lý ơi, bật đèn") or the end ("bật đèn đi
+   * trợ lý ơi") of a transcript and returns the request without it. Fillers around the name
+   * ("à", "ê", "này", "ơi", "nhé") are dropped too. found=false when the name is absent.
+   */
+  stripWakeWord(transcript: string): { found: boolean; request: string } {
+    const words = transcript.trim().split(/\s+/).filter(Boolean);
+    const norm = this.wakeTokens(words.join(' '));
+    // "ơi" right after the name is often heard as "hơi", "rời" or "dời" (folded to "doi").
+    const call = ['', 'oi', 'hoi', 'doi', 'ui', 'a', 'e', 'ha'];
+    const filler = new Set([...call, 'nai', 'alo', 'nhe', 'nha', 'di']);
+    const clean = (list: string[]) => list.join(' ').replace(/^[\s,.!?;:…-]+|[\s,;:…-]+$/g, '').trim();
+    for (const wake of this.wakeWords()) {
+      // At the start.
+      let i = 0;
+      while (i < norm.length && filler.has(norm[i]) && norm[i] !== wake[0]) i++;
+      if (wake.every((token, k) => norm[i + k] === token)) {
+        let j = i + wake.length;
+        while (j < norm.length && call.includes(norm[j])) j++;
+        return { found: true, request: clean(words.slice(j)) };
+      }
+      // At the end.
+      let end = norm.length;
+      while (end > 0 && filler.has(norm[end - 1]) && norm[end - 1] !== wake.at(-1)) end--;
+      const start = end - wake.length;
+      if (start >= 0 && wake.every((token, k) => norm[start + k] === token))
+        return { found: true, request: clean(words.slice(0, start)) };
+    }
+    return { found: false, request: transcript.trim() };
+  }
+
   async analyze(pcm: Buffer, sensor: Sensor | undefined, history: ChatLog[],
-    tracks: { id: string; title: string }[], signal: AbortSignal, ledEnabled?: boolean): Promise<DecisionValue> {
+    tracks: { id: string; title: string }[], signal: AbortSignal, ledEnabled?: boolean,
+    requireWake = false): Promise<DecisionValue> {
     if (this.localProvider()) {
-      const { text: transcript, confidence, language } = await this.transcribe(pcm, signal);
+      let { text: transcript, confidence, language } = await this.transcribe(pcm, signal);
       if (!transcript) return { transcript: '', language: 'vi', intent: 'ignore', reply: '', trackId: '' };
+      if (requireWake && this.wakeRequired()) {
+        const { found, request } = this.stripWakeWord(transcript);
+        // Talk not addressed to the assistant is dropped silently. Its words are only logged
+        // with DEVICE_DEBUG=1 (to check how the recogniser hears the name).
+        if (!found) {
+          console.log(`Wake word not heard: ignored ${transcript.split(/\s+/).length}-word sentence` +
+            (process.env.DEVICE_DEBUG === '1' ? ` "${transcript.slice(0, 80)}"` : ''));
+          return { transcript, language: 'vi', intent: 'ignore', reply: '', trackId: '' };
+        }
+        if (!this.normalizeLocalInput(request)) {
+          return { transcript, language: 'vi', intent: 'chat', reply: 'Dạ, em nghe đây đại ca.', trackId: '' };
+        }
+        transcript = request;
+      }
       // Badly recognised speech is asked again instead of guessed (no device action,
       // no off-topic answer). Real INMP441 recordings: correct sentences 0.86-1.0,
       // a correct one with an English loanword 0.67, garbage 0.72-0.74 (Qwen asks those again).

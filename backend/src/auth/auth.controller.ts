@@ -2,11 +2,8 @@ import {
   Body, Controller, Delete, ForbiddenException, Get, Inject, Param, Patch, Post, Query, Req,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { Require, clientIp, clientSource, currentUser, httpError } from './auth.guard';
+import { Require, clientIp, clientSource, currentUser, httpError, isDirectLocal } from './auth.guard';
 
-function isLocal(req: any) {
-  return ['127.0.0.1', '::1'].includes(clientIp(req));
-}
 
 @Controller('api')
 export class AuthController {
@@ -20,10 +17,10 @@ export class AuthController {
     return { setupRequired: !(await this.auth.hasUsers()) };
   }
 
-  /** First run only, and only from the machine running the backend. */
+  /** First run only, and only typed on the machine running the backend (never through a tunnel). */
   @Post('auth/setup')
   async setup(@Req() req: any, @Body() body: any) {
-    if (!isLocal(req)) throw new ForbiddenException('Tạo tài khoản chủ nhà chỉ làm được trên máy chạy backend.');
+    if (!isDirectLocal(req)) throw new ForbiddenException('Tạo tài khoản chủ nhà chỉ làm được trên máy chạy backend.');
     try {
       const user = await this.auth.setup({ username: body?.username, password: body?.password, displayName: body?.displayName });
       void this.auth.audit({ username: user.username, source: clientSource(req), action: 'auth:setup', ip: clientIp(req) });

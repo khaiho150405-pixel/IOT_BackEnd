@@ -219,6 +219,7 @@ Chỉ có **một loại tài khoản** và **khách không cần tài khoản**
 - Mật khẩu băm bằng scrypt; dữ liệu nằm trong `backend/data/aiot.sqlite` (hoặc PostgreSQL nếu đặt `DATABASE_URL`), khóa ký token trong `backend/data/auth-secret`. **Sao lưu thư mục `backend/data/`**, không commit nó (đã có trong `.gitignore`).
 - **MQTT:** đăng nhập bằng cùng tên/mật khẩu; mọi tài khoản dùng được mọi topic (`aiot/#`, `aiot/device/<MAC>/led/set`, `.../command`…). Không có tài khoản thì broker từ chối. Topic dữ liệu (`.../sensor`, `.../state`) chỉ backend được gửi: gói giả mạo bị bỏ (không ngắt kết nối) và ghi nhật ký "Bị từ chối".
 - **Nhật ký** ghi: ai, lúc nào, nguồn (Web, App, Giọng nói, MQTT), thao tác, thiết bị, kết quả.
+- **Khi đưa ra Internet qua đường hầm** (cloudflared, ngrok…): tạo tài khoản đầu tiên **trước**. Việc tạo tài khoản đầu tiên chỉ nhận yêu cầu gõ trực tiếp trên laptop (`localhost`, không qua proxy), nên đường hầm không tạo được; trang `/api/network` không cho người ngoài mạng LAN biết IP nội bộ. Backend đọc địa chỉ thật của người truy cập từ `CF-Connecting-IP`/`X-Forwarded-For` (chỉ với kết nối từ chính laptop; tắt bằng `TRUST_PROXY=false`), để một người gõ sai mật khẩu không khóa luôn người khác. Mỗi địa chỉ sai 20 lần trong 15 phút (với bất kỳ tên đăng nhập nào) bị chặn 15 phút. Kênh trực tiếp dành tối đa `LIVE_MAX_GUESTS` (30) chỗ cho khách, mỗi địa chỉ tối đa `LIVE_MAX_PER_IP` (5) kết nối chưa đăng nhập; kết nối im lặng bị đóng sau 5 giây. Chỉ mở cổng HTTPS (3443) ra ngoài, **không** mở cổng 3000 (ESP32, token thiết bị đi dạng chưa mã hóa) và 1883 (MQTT).
 - Quên mật khẩu tài khoản đầu tiên: dừng backend, đổi tên `backend/data/aiot.sqlite` (dữ liệu cũ được giữ lại để tra cứu), khởi động lại và tạo tài khoản mới.
 
 API chính (gửi `Authorization: Bearer <accessToken>`; app di động gửi thêm `X-Client: app`):
@@ -258,13 +259,27 @@ Firmware đọc cả hai kênh I2S của INMP441 và tự chọn kênh có tín 
 
 Các module và ESP32 phải nối chung GND.
 
-| Module | Chân module | GPIO ESP32-S3 |
-| --- | --- | --- |
-| DHT22 | DATA | 10 |
-| OLED SSD1306 128×64 I2C | SDA / SCL | 8 / 9 |
-| WS2812B | DIN | 11 |
-| INMP441 | WS / SCK / SD | 4 / 5 / 6 |
-| MAX98357A | LRC / BCLK / DIN | 15 / 16 / 17 |
+Chân được chọn theo vị trí trên breadboard để **không dây nào bắt chéo** (đặt bo với cổng USB bên trái: hàng chân dưới có `5VIN G13 G14 G21 … G2 G1 GND`, hàng chân trên có `3V3 … G17 G16 G15 … G6 G5 G4 EN 3V3 GND`):
+
+| Module (vị trí) | Chân module | GPIO ESP32-S3 | Hàng chân |
+| --- | --- | --- | --- |
+| OLED SSD1306 128×64 I2C (dưới, bên trái) | SCL / SDA | 13 / 14 | dưới, đầu trái |
+| DHT22 (rời, phía dưới trái) | DATA | 21 | dưới, cạnh OLED |
+| WS2812B (dưới, bên phải) | DIN | 1 | dưới, đầu phải (cạnh GND) |
+| MAX98357A (trên, giữa) | LRC / BCLK / DIN | 17 / 16 / 15 | trên, giữa (trái → phải đúng thứ tự chân ampli) |
+| INMP441 (rời, phía trên phải) | WS / SCK / SD | 4 / 5 / 6 | trên, đầu phải (cạnh 3V3, GND) |
+
+Nguồn qua hai thanh nguồn của breadboard, đi vòng mép trái bo (phía USB) nên không cắt ngang dây tín hiệu:
+- **Thanh nguồn dưới:** `+` = 3V3, `−` = GND (lấy GND ở chân GND cuối hàng dưới). Cấp cho OLED, DHT22, WS2812B.
+- **Thanh nguồn trên:** `+` = 5VIN, `−` = GND (chân GND cuối hàng trên). Cấp cho MAX98357A.
+- INMP441 (6 chân): SD → G6, SCK → G5, WS → G4, VDD → 3V3, GND → GND, **L/R → GND** (kênh trái), lấy ngay ở cuối hàng chân trên.
+- MAX98357A (7 chân): LRC → G17, BCLK → G16, DIN → G15, GND → GND, VIN → 5V; **GAIN và SD để trống** (SD trống = bật, GAIN trống = 9 dB). Loa vào cầu đấu `+` `−`.
+- OLED (4 chân): VCC → 3V3, GND → GND, SCL → G13, SDA → G14.
+- DHT22 module 3 chân: VCC → 3V3, DATA → G21, GND → GND (loại 4 chân trần: chân 3 để trống, thêm điện trở 10 kΩ giữa DATA và VCC).
+- WS2812B: VCC → 3V3, DIN → G1, GND → GND; **DOUT để trống**.
+- Tránh các chân G0, G3, G45, G46 (chân khởi động), G19/G20 (USB), G35–G37 (PSRAM của bản N16R8), G43/G44 (log Serial), G48 (LED RGB trên bo).
+
+**Màn OLED bị sọc ngang:** do nhiễu trên dây I2C (dây dài chạy cạnh dây I2S của ampli, tiếp xúc breadboard lỏng) làm hỏng cấu hình bên trong SSD1306. Firmware chạy I2C ở 100 kHz và gửi lại cấu hình màn hình mỗi 5 giây, nên vệt sọc tự hết; dây OLED nên ngắn, cắm chặt và không đi song song với dây ampli.
 
 - INMP441 cấp 3.3 V, L/R nối GND. **Lỗ thu âm nằm ở mặt dưới bo** — không cắm úp sát breadboard, hướng lỗ về phía người nói, nói cách 5–30 cm.
 - DHT22 cấp 3.3 V; cảm biến rời cần điện trở kéo lên 4.7–10 kΩ ở DATA.
@@ -278,7 +293,21 @@ Các module và ESP32 phải nối chung GND.
 
 ## 5. Sử dụng
 
-- Khi OLED hiện `Listen`, thử: "Xin chào em", "Bật đèn lên", "Tắt đèn đi", "Nhiệt độ trong phòng bao nhiêu", "Kể chuyện cười đi", "Làm thơ về mùa thu", "Ba cộng bốn bằng mấy", "Hello".
+- **Thanh trạng thái OLED** (dòng giữa màn hình) cho biết hệ thống đang làm gì. Nền sáng = đang bận với bạn, khung viền = đang rảnh:
+
+  | Hiển thị | Ý nghĩa |
+  | --- | --- |
+  | `Goi: Tro ly oi` (khung viền) | Đang rảnh, chờ gọi tên |
+  | `NGHE LENH 9s` (nền sáng, vạch dưới ngắn dần) | Đã gọi tên/vừa trả lời: nói lệnh tiếp, không cần tên |
+  | `DANG THU AM...` (vạch dưới nhảy theo giọng) | Micro đang thu giọng bạn |
+  | `DANG XU LY...` | Đang nhận dạng giọng nói và hiểu lệnh |
+  | `DANG TRA LOI...` / `PHAT NHAC...` | Loa đang phát câu trả lời / nhạc |
+  | `CO LOI - NOI LAI` | Lượt vừa rồi lỗi, nói lại |
+
+  Góc phải: `D:BAT`/`D:TAT` là trạng thái đèn.
+- **Gọi tên trước khi ra lệnh:** "Trợ lý ơi, bật đèn lên" (tên đặt ở cuối câu cũng được: "Tắt đèn đi trợ lý ơi"). Câu không có tên được coi là người trong phòng nói chuyện với nhau và bị bỏ qua lặng lẽ (không trả lời, không ghi log nội dung). Chỉ gọi "Trợ lý ơi" thì AI đáp "Dạ, em nghe đây đại ca" và chờ câu tiếp.
+- **Nói tiếp không cần gọi lại tên** trong 10 giây sau mỗi câu trả lời; OLED đếm ngược "Em đang nghe đại ca... Còn 9 giây", hết giờ thì hiện lại gợi ý gọi tên. Đổi tên/thời gian bằng `WAKE_WORDS` (nhiều tên cách nhau dấu phẩy; để trống = luôn nghe như trước) và `WAKE_FOLLOWUP_MS` trong `backend/.env`. Lệnh gõ trên dashboard và MQTT không cần tên.
+- Khi OLED hiện `Listen`, thử: "Trợ lý ơi, xin chào", "Trợ lý ơi, bật đèn lên", "Tắt đèn đi trợ lý", "Trợ lý ơi, nhiệt độ trong phòng bao nhiêu", "Trợ lý ơi, kể chuyện cười đi", "Trợ lý ơi, ba cộng bốn bằng mấy".
 - AI làm ngay yêu cầu, không hỏi lại; chỉ hỏi lại khi câu nghe sai đến mức không đoán được ý, hoặc với câu phủ định về đèn ("Đừng tắt đèn").
 - Hủy lượt đang xử lý hoặc dừng nói/nhạc: **nhấn rồi thả BOOT** khi board đang chạy (không nhấn RESET).
 - Nhạc: thêm file WAV PCM16 mono 16 kHz (≤ 10 MB) vào `backend/music` và khai báo trong `backend/music/catalog.json` (hoặc đặt file `.mp4` trong `backend/music/mp4`). Chuyển đổi: `ffmpeg -i input.mp3 -ac 1 -ar 16000 -c:a pcm_s16le backend/music/song.wav`. Thư viện trống thì AI nói thật là chưa có bài.
@@ -298,7 +327,9 @@ Các module và ESP32 phải nối chung GND.
 | `Whisper model directory is incomplete` | Chưa chạy `scripts\setup-phowhisper.py`, hoặc sai `LOCAL_WHISPER_MODEL` |
 | `FFmpeg is required` | Cài FFmpeg (bước 1) hoặc đặt `FFMPEG_EXE` trỏ tới `ffmpeg.exe` |
 | AI trả lời "đang suy nghĩ hơi chậm" | Ollama chưa chạy: `ollama serve`, kiểm tra `ollama list` có `qwen2.5:3b` |
-| Giọng đọc chậm, log `Edge-TTS failed` | Edge TTS (miễn phí) đang chập chờn; hệ thống tự dùng giọng "Microsoft An" trong 5 phút. Cần cài giọng ở bước 3 |
+| Giọng đọc chậm, log `Edge-TTS failed` | Edge TTS (miễn phí) đang chập chờn; hệ thống tự dùng giọng "Microsoft An" trong 5 phút, lỗi liên tiếp thì giãn dần tới 60 phút. Cần cài giọng ở bước 3 |
+| Nói mà AI không phản ứng | Chưa gọi tên: bắt đầu bằng "Trợ lý ơi" (xem `WAKE_WORDS`). Log `Voice capture` không xuất hiện thì nói to/gần hơn |
+| Bấm đèn trên dashboard báo quá thời gian / phản hồi chậm | Bật `DEVICE_DEBUG=1` trong `backend/.env`: log `Device ... loop N ms` (vòng lặp mạng ESP32, bình thường vài ms) và `LED on ack after N ms`. Vòng lặp hàng giây là ESP32 bị nghẽn mạng: đặt ESP32 cách laptop ≥ 1 m, kiểm tra hotspot |
 | ESP32 không kết nối | Cùng mạng 2.4 GHz; `WS_HOST` đúng IP máy AI worker; token trùng; mở tường lửa (bước 8) |
 | ESP32 tự khởi động lại khi đang nói (`Device ... rebooted`) | Nguồn yếu: xem mục Nguồn điện; tạm giảm `SPEAKER_VOLUME` xuống `0.3` |
 | Nhận dạng ra chữ vô nghĩa / "em nghe chưa rõ" | Nói gần micro hơn (5–30 cm), lỗ micro không bị che, giảm nhiễu nguồn. Log `Voice capture: ... peak=` nên đạt ~3000–15000; `peak=32767` là quá to (méo) |

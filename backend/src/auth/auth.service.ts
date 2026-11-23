@@ -38,13 +38,17 @@ export class AuthError extends Error {
 
 const USERNAME = /^[a-zA-Z0-9._-]{3,32}$/;
 const MAX_FAILURES = 5, FAILURE_WINDOW_MS = 15 * 60_000, LOCK_MS = 5 * 60_000;
+// Per address, across all usernames: stops guessing passwords by rotating usernames.
+const MAX_IP_FAILURES = 20, IP_LOCK_MS = 15 * 60_000, MAX_TRACKED = 10_000;
+type FailureEntry = { count: number; first: number; lockedUntil: number };
 
 @Injectable()
 export class AuthService implements OnModuleInit, OnModuleDestroy {
   private db!: DataSource;
   private secret = '';
   private readyPromise?: Promise<void>;
-  private failures = new Map<string, { count: number; first: number; lockedUntil: number }>();
+  private failures = new Map<string, FailureEntry>();
+  private ipFailures = new Map<string, FailureEntry>();
   private readonly accessTtl = Number(process.env.AUTH_ACCESS_TTL_S || 900);           // 15 min
   private readonly refreshTtl = Number(process.env.AUTH_REFRESH_TTL_S || 30 * 86400);  // 30 days
 
@@ -136,21 +140,34 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
     await this.ready();
     const key = `${ip}|${String(username).toLowerCase()}`;
     const entry = this.failures.get(key);
-    if (entry && entry.lockedUntil > Date.now())
-      throw new AuthError(429, `Đăng nhập sai quá nhiều lần. Thử lại sau ${Math.ceil((entry.lockedUntil - Date.now()) / 60000)} phút.`);
+    const ipEntry = this.ipFailures.get(ip);
+    const lockedUntil = Math.max(entry?.lockedUntil ?? 0, ipEntry?.lockedUntil ?? 0);
+    if (lockedUntil > Date.now())
+      throw new AuthError(429, `Đăng nhập sai quá nhiều lần. Thử lại sau ${Math.ceil((lockedUntil - Date.now()) / 60000)} phút.`);
     const user = typeof username === 'string' ? await this.users().findOneBy({ username }) : null;
     const ok = !!user && typeof password === 'string' && await verifyPassword(password, user.passwordHash);
     if (!ok || !this.isUsable(user!)) {
-      const now = Date.now();
-      const next = entry && now - entry.first < FAILURE_WINDOW_MS ?
-        { ...entry, count: entry.count + 1 } : { count: 1, first: now, lockedUntil: 0 };
-      if (next.count >= MAX_FAILURES) next.lockedUntil = now + LOCK_MS;
-      this.failures.set(key, next);
+      this.recordFailure(this.failures, key, MAX_FAILURES, LOCK_MS);
+      this.recordFailure(this.ipFailures, ip, MAX_IP_FAILURES, IP_LOCK_MS);
       if (ok && user && !this.isUsable(user)) throw new AuthError(403, 'Tài khoản đã bị khóa hoặc hết hạn.');
       throw new AuthError(401, 'Sai tên đăng nhập hoặc mật khẩu.');
     }
     this.failures.delete(key);
     return user!;
+  }
+
+  private recordFailure(map: Map<string, FailureEntry>, key: string, max: number, lockMs: number) {
+    const now = Date.now();
+    if (map.size >= MAX_TRACKED) {
+      // Bounded memory: forget entries that are neither recent nor locked.
+      for (const [k, e] of map) if (e.lockedUntil <= now && now - e.first >= FAILURE_WINDOW_MS) map.delete(k);
+      if (map.size >= MAX_TRACKED) map.delete(map.keys().next().value!);
+    }
+    const entry = map.get(key);
+    const next = entry && now - entry.first < FAILURE_WINDOW_MS ?
+      { ...entry, count: entry.count + 1 } : { count: 1, first: now, lockedUntil: 0 };
+    if (next.count >= max) next.lockedUntil = now + lockMs;
+    map.set(key, next);
   }
 
   private isUsable(user: User): boolean {

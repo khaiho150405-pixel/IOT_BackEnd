@@ -26,6 +26,9 @@ function sendUtterance(ws: WebSocket) {
 
 test('WebSocket integrates microphone → AI → ack → OLED → PCM, interrupts, and recovers from TTS errors', async t => {
   process.env.DEVICE_TOKEN = 'local-test-token-with-at-least-24-characters';
+  process.env.LED_ACK_RESEND_MS = '700';
+  process.env.LED_ACK_TIMEOUT_MS = '2500';
+  t.after(() => { delete process.env.LED_ACK_RESEND_MS; delete process.env.LED_ACK_TIMEOUT_MS; });
   const history = new HistoryStore();
   let calls = 0, receivedSensor: any, receivedHistory: any;
   let ttsFailure = false;
@@ -81,6 +84,9 @@ test('WebSocket integrates microphone → AI → ack → OLED → PCM, interrupt
   sendUtterance(ws); // Deliberately never acknowledge this command.
   await until(() => messages.some(m => m.type === 'notice' && m.code === 'turn_failed'));
   assert.equal(messages.filter(m => m.type === 'chat').length, 2, 'timeout must not claim command success');
+  const unanswered = messages.filter(m => m.type === 'command').at(-1);
+  assert.ok(messages.filter(m => m.type === 'command' && m.id === unanswered.id).length >= 3,
+    'an unacknowledged command is re-sent with the same id');
   ws.close();
 });
 test('authentication rejects missing/mismatched token', () => {
@@ -363,4 +369,64 @@ test('a reconnecting device replaces its stale connection instead of being rejec
   assert.equal(devices.length, 1);
   assert.equal(devices[0].connected, true);
   fresh.close();
+});
+
+test('spoken turns need the assistant name, except right after an answer', async t => {
+  process.env.DEVICE_TOKEN = 'wake-word-token-with-at-least-24-characters';
+  process.env.WAKE_FOLLOWUP_MS = '3000';
+  t.after(() => { delete process.env.WAKE_FOLLOWUP_MS; });
+  const wakeFlags: boolean[] = [];
+  let answer = true;
+  const ai = {
+    async analyze(_pcm: Buffer, _s: any, _h: any, _t: any, _signal: any, _led: any, requireWake: boolean): Promise<DecisionValue> {
+      wakeFlags.push(requireWake);
+      return answer ? { transcript: 'Trợ lý ơi, chào em', language: 'vi', intent: 'chat', reply: 'Dạ em chào đại ca.', trackId: '' } :
+        { transcript: 'nói chuyện riêng', language: 'vi', intent: 'ignore', reply: '', trackId: '' };
+    },
+    async speak() { return Buffer.alloc(640); },
+    wakeRequired: () => true,
+  };
+  const http = createServer(), gateway = new AiotGateway(ai as unknown as AiotService, new HistoryStore());
+  const shown: string[] = [];
+  const show = (gateway as any).show.bind(gateway);
+  (gateway as any).show = (s: any, text: string, answer?: string) => { shown.push(text); return show(s, text, answer); };
+  gateway.attach(http); http.listen(0, '127.0.0.1'); await once(http, 'listening');
+  t.after(async () => { gateway.onModuleDestroy(); await new Promise<void>(resolve => http.close(() => resolve())); });
+  const ws = new WebSocket(`ws://127.0.0.1:${(http.address() as AddressInfo).port}/aiot`,
+    { headers: { Authorization: `Bearer ${process.env.DEVICE_TOKEN}` } });
+  const messages: any[] = [];
+  ws.on('message', (data, binary) => {
+    if (binary) return;
+    const message = JSON.parse(data.toString()); messages.push(message);
+    if (message.type === 'audio_end') ws.send(JSON.stringify({ type: 'playback_done', id: message.id }));
+  });
+  await once(ws, 'open');
+  ws.send(JSON.stringify({ type: 'hello', device_id: 'wake-device', audio: { format: 'pcm_s16le', sample_rate: 16000, channels: 1 } }));
+  const listening = () => messages.filter(m => m.state === 'listening').length;
+  await until(() => listening() === 1);
+
+  sendUtterance(ws); // first request: the name is required
+  await until(() => listening() === 2);
+  await sleep(1100); // stay under the 96 KB/s device rate limit
+  sendUtterance(ws); // started inside the follow-up window: no name needed
+  await until(() => listening() === 3);
+  assert.deepEqual(wakeFlags, [true, false]);
+  // The device is told the name is needed and how long the no-name window lasts (status bar countdown).
+  const states = messages.filter(m => m.state === 'listening');
+  assert.deepEqual(states[0], { type: 'status', state: 'listening', wake: true, follow_ms: 0 });
+  assert.ok(states[1].follow_ms > 2500 && states[1].follow_ms <= 3000, 'window announced after an answer');
+
+  answer = false; // overheard talk is ignored and opens no follow-up window
+  await sleep(4800); // window (3 s) + the 1.56 s utterance the test sends at once
+  sendUtterance(ws);
+  await until(() => listening() === 4);
+  await sleep(1100);
+  sendUtterance(ws);
+  await until(() => listening() === 5);
+  assert.deepEqual(wakeFlags, [true, false, true, true]);
+  assert.equal(messages.filter(m => m.type === 'chat').length, 2, 'ignored talk gets no reply');
+  const after = messages.filter(m => m.state === 'listening');
+  assert.equal(after[3].follow_ms, 0, 'ignored talk opens no window');
+  assert.ok(shown.includes('Gọi "Trợ lý ơi"\nđể ra lệnh nhé.'), 'back to the hint when the window ends');
+  ws.close();
 });

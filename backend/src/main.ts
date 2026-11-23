@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { AuthController } from './auth/auth.controller';
-import { AuthGuard, Require, clientIp, clientSource, currentUser } from './auth/auth.guard';
+import { AuthGuard, Require, clientIp, clientSource, currentUser, isDirectLocal, isPrivateClient } from './auth/auth.guard';
 import { AuthService, AuthUser } from './auth/auth.service';
 import { AiotGateway } from './aiot/aiot.gateway';
 import { AiotService } from './aiot/aiot.service';
@@ -26,10 +26,6 @@ const PAGE_CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-s
 /** Runtime network facts shared with the routes below (filled in by main()). */
 const network: { tls?: TlsMaterial; httpsPort: number; mdnsName?: string } = { httpsPort: 3443 };
 
-function isLocalRequest(req: any) {
-  const host = String(req.hostname || req.headers?.host || '').split(':')[0].toLowerCase();
-  return ['localhost', '127.0.0.1', '[::1]', '::1'].includes(host);
-}
 
 /**
  * Browsers on other machines are sent to HTTPS so passwords never cross the LAN in clear
@@ -37,7 +33,7 @@ function isLocalRequest(req: any) {
  * phones need before they trust the certificate. HTTPS_REDIRECT=false disables this.
  */
 function redirectToHttps(req: any, response: any): boolean {
-  if (!network.tls || req.socket?.encrypted || isLocalRequest(req) || process.env.HTTPS_REDIRECT === 'false') return false;
+  if (!network.tls || req.socket?.encrypted || isDirectLocal(req) || process.env.HTTPS_REDIRECT === 'false') return false;
   const host = String(req.hostname || req.headers?.host || '').split(':')[0];
   response.redirect(302, `https://${host}:${network.httpsPort}${req.originalUrl || req.url}`);
   return true;
@@ -94,11 +90,15 @@ class HealthController {
     response.send(network.tls.caCert);
   }
 
-  /** Addresses for the /trust page (this server's own LAN names, nothing about users). */
+  /**
+   * Addresses for the /trust page. The laptop's LAN addresses are only told to clients on the
+   * same private network; through a tunnel or from the Internet the list stays empty.
+   */
   @Get('api/network')
-  networkInfo() {
-    return { https: !!network.tls, httpsPort: network.httpsPort, mdnsName: network.mdnsName ?? null,
-      ips: network.tls?.ips.filter(ip => ip !== '127.0.0.1') ?? [] };
+  networkInfo(@Req() req: any) {
+    const local = isPrivateClient(req);
+    return { https: !!network.tls, httpsPort: network.httpsPort, mdnsName: local ? network.mdnsName ?? null : null,
+      ips: local ? network.tls?.ips.filter(ip => ip !== '127.0.0.1') ?? [] : [] };
   }
 
   @Get('manifest.webmanifest')
@@ -209,6 +209,7 @@ async function main() {
     if (process.env[key] && (!Number.isFinite(Number(process.env[key])) || Number(process.env[key]) < min || Number(process.env[key]) > max)) throw new Error(`Invalid ${key}`);
   }
   const app = await NestFactory.create(AppModule);
+  app.getHttpAdapter().getInstance().disable('x-powered-by');
   app.enableShutdownHooks();
   await app.init();
   app.get(AiotGateway).attach(app.getHttpServer());

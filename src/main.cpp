@@ -25,10 +25,15 @@
 
 // Arduino-ESP32 2.0.17 / ESP-IDF 4.4 legacy I2S API, pinned in platformio.ini.
 namespace {
-constexpr int DHT_PIN = 10;
-constexpr int SDA_PIN = 8, SCL_PIN = 9, LED_PIN = 11;
+// Pins follow the board edges so no jumper crosses another (USB connectors on the left):
+//   lower header (5VIN G13 G14 G21 ... G2 G1 GND): OLED, DHT22 at the left end, WS2812B at the right end
+//   upper header (3V3 ... G17 G16 G15 ... G6 G5 G4 EN 3V3 GND): MAX98357A in the middle, INMP441 at the right end
+// Avoided: G0/G3/G45/G46 (strapping), G19/G20 (USB), G35-G37 (octal PSRAM), G43/G44 (serial log), G48 (on-board RGB).
+constexpr int DHT_PIN = 21;
+constexpr int SCL_PIN = 13, SDA_PIN = 14, LED_PIN = 1;
 constexpr int MIC_WS = 4, MIC_BCLK = 5, MIC_SD = 6;
-constexpr int SPK_WS = 15, SPK_BCLK = 16, SPK_DIN = 17;
+// Left to right on the header: G17 G16 G15 = LRC BCLK DIN, the order of the MAX98357A pins.
+constexpr int SPK_WS = 17, SPK_BCLK = 16, SPK_DIN = 15;
 constexpr uint32_t SAMPLE_RATE = 16000;
 constexpr size_t MIC_SAMPLES = 256;
 constexpr size_t AUDIO_CAPACITY = 32768; // 2 seconds of mono PCM16, in PSRAM.
@@ -42,13 +47,19 @@ static_assert(MIC_SHIFT >= 8 && MIC_SHIFT <= 24, "Invalid MIC_SHIFT");
 static_assert(LED_COUNT > 0, "LED_COUNT must be positive");
 
 DHT dht(DHT_PIN, DHT22);
-Adafruit_SSD1306 display(128, 64, &Wire, -1);
+// 100 kHz I2C: long breadboard jumpers next to the I2S lines corrupt 400 kHz transfers.
+Adafruit_SSD1306 display(128, 64, &Wire, -1, 100000UL, 100000UL);
 CRGB leds[LED_COUNT];
 WebSocketsClient socketClient;
 std::atomic<bool> connected{false}, speaking{false}, ledEnabled{true};
 std::atomic<uint32_t> ledColor{0x00FF00};
 std::atomic<bool> serverBusy{false};
 std::atomic<unsigned> uiState{0}; // offline, listening, thinking, speech, music, error
+// Status bar inputs: whether the assistant name is needed, the no-name window (countdown),
+// and the microphone gate (the user is being recorded right now) with its level.
+std::atomic<bool> wakeRequired{true}, micCapturing{false};
+std::atomic<uint32_t> followUntilMs{0}, followTotalMs{0};
+std::atomic<int> micLevel{0};
 portMUX_TYPE displayMux = portMUX_INITIALIZER_UNLOCKED;
 uint8_t *oledPages = nullptr;
 size_t oledPageCount = 0;
@@ -70,6 +81,11 @@ uint32_t lastAudioPacket = 0;
 // I2S frame) and a smoothed "speech-likeness" score per slot, see readMic().
 int micSlot = 0;
 float micScore[2] = {0, 0};
+// Diagnostics: slowest network-loop pass since the last sensor report and the part that caused it.
+uint32_t loopMaxMs = 0;
+const char *loopSlowPart = "";
+float micPeakRms = 0;     // loudest 16 ms chunk (voice band) since the last report
+uint32_t micOpenCount = 0; // voice-gate openings since the last report
 
 void clearPlayback();
 
@@ -412,12 +428,20 @@ h2{color:#38bdf8;font-size:20px;margin-bottom:12px}p{color:#94a3b8;font-size:14p
   ESP.restart();
 }
 
-void setupWebServer() {
+bool portalOn = false;
+
+// The setup hotspot (open, no password) runs only while the ESP32 cannot reach the
+// backend: an always-on AP shares the radio with the station link and slows it down,
+// and anyone nearby could switch the light through /api/led.
+void startPortal() {
+  if (portalOn) return;
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP("AIoT_Smart_Room");
   if (!dnsServer) {
     dnsServer = new DNSServer();
     dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
-    dnsServer->start(53, "*", IPAddress(192, 168, 4, 1));
   }
+  dnsServer->start(53, "*", IPAddress(192, 168, 4, 1));
   if (!configServer) {
     configServer = new WebServer(80);
     configServer->on("/", HTTP_GET, handleRoot);
@@ -428,9 +452,20 @@ void setupWebServer() {
     configServer->on("/generate_204", HTTP_GET, handleRoot);
     configServer->on("/ncsi.txt", HTTP_GET, handleRoot);
     configServer->onNotFound(handleRoot);
-    configServer->begin();
-    Serial.println("Mobile Dashboard ready @ http://192.168.4.1 (AP: AIoT_Smart_Room)");
   }
+  configServer->begin();
+  portalOn = true;
+  Serial.println("Setup hotspot ON @ http://192.168.4.1 (AP: AIoT_Smart_Room)");
+}
+
+void stopPortal() {
+  if (!portalOn) return;
+  portalOn = false;
+  if (dnsServer) dnsServer->stop();
+  if (configServer) configServer->stop();
+  WiFi.softAPdisconnect(true);
+  WiFi.mode(WIFI_STA);
+  Serial.println("Setup hotspot OFF (backend connected)");
 }
 
 void fatal(const char *message) {
@@ -575,6 +610,10 @@ void receiveJson(const uint8_t *data, size_t length) {
     const char *state = doc["state"] | "";
     if (!strcmp(state, "listening")) {
       clearPlayback(); serverBusy = false; uiState = 1;
+      wakeRequired = doc["wake"] | true;
+      const uint32_t follow = doc["follow_ms"] | 0u;
+      followTotalMs = follow;
+      followUntilMs = follow ? millis() + follow : 0;
       Serial.println("Microphone ready: listening");
     }
     else if (!strcmp(state, "thinking")) { serverBusy = true; uiState = 2; }
@@ -737,6 +776,12 @@ void sendSensor() {
   JsonArray scores = doc.createNestedArray("mic_scores");
   scores.add(static_cast<long>(micScore[0]));
   scores.add(static_cast<long>(micScore[1]));
+  doc["loop_max_ms"] = loopMaxMs;
+  doc["loop_slow"] = loopSlowPart;
+  doc["rssi"] = WiFi.RSSI();
+  doc["mic_peak_rms"] = static_cast<long>(micPeakRms);
+  doc["mic_gate_opens"] = micOpenCount;
+  loopMaxMs = 0; loopSlowPart = ""; micPeakRms = 0; micOpenCount = 0;
   String output;
   serializeJson(doc, output);
   socketClient.sendTXT(output);
@@ -776,15 +821,68 @@ size_t readMic(const int32_t *frames, size_t count, int16_t *out) {
   return count;
 }
 
+// Voice gate. Streaming the microphone non-stop (32 KB/s) kept the small lwIP send buffer
+// full: a blocked socket write then froze this whole loop for up to 10 s (WiFiClient retries
+// 10 x 1 s), so LED ACKs, sensor reports and heartbeats were late and commands timed out.
+// Audio is now sent only around speech: a short pre-roll (the first syllable), the speech,
+// and a hangover of silence longer than the backend's VAD_SILENCE_MS so it can close the turn.
+// The gate opens at 2.5x the room's noise floor (learnt while quiet), kept within 80..150:
+// quiet room ~45, speech ~1000 at 30 cm and ~200 at 1 m.
+constexpr float MIC_GATE_MIN = 80, MIC_GATE_MAX = 150;
+float micNoiseFloor = 45;
+constexpr size_t PREROLL_SAMPLES = SAMPLE_RATE * 3 / 10;
+constexpr uint32_t GATE_HANGOVER_MS = 2000;
+int16_t preroll[PREROLL_SAMPLES];
+size_t prerollHead = 0, prerollCount = 0;
+bool gateOpen = false;
+uint32_t gateCloseAt = 0;
+
+// Level of the voice band only: a first-order 120 Hz high-pass (as the backend applies before
+// its VAD) removes DC drift and rumble that otherwise kept the gate open in a quiet room.
+float chunkRms(const int16_t *pcm, size_t count) {
+  static float previousIn = 0, previousOut = 0;
+  constexpr float a = 0.955f; // RC / (RC + dt) for 120 Hz at 16 kHz
+  float power = 0;
+  for (size_t i = 0; i < count; ++i) {
+    const float out = a * (previousOut + pcm[i] - previousIn);
+    previousIn = pcm[i]; previousOut = out;
+    power += out * out;
+  }
+  return sqrtf(power / count);
+}
+
+void rememberPreroll(const int16_t *pcm, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    preroll[prerollHead] = pcm[i];
+    prerollHead = (prerollHead + 1) % PREROLL_SAMPLES;
+  }
+  prerollCount = min(PREROLL_SAMPLES, prerollCount + count);
+}
+
+void flushPreroll() {
+  static int16_t chunk[1024]; // 2 KB frames; the backend accepts up to 4 KB
+  size_t index = (prerollHead + PREROLL_SAMPLES - prerollCount) % PREROLL_SAMPLES;
+  while (prerollCount) {
+    const size_t n = min(prerollCount, sizeof(chunk) / sizeof(chunk[0]));
+    for (size_t i = 0; i < n; ++i) { chunk[i] = preroll[index]; index = (index + 1) % PREROLL_SAMPLES; }
+    socketClient.sendBIN(reinterpret_cast<uint8_t *>(chunk), n * sizeof(int16_t));
+    prerollCount -= n;
+  }
+}
+
+void resetVoiceGate() { gateOpen = false; prerollCount = 0; micCapturing = false; }
+
 void networkTask(void *) {
   loadConfig();
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP("AIoT_Smart_Room");
-  setupWebServer();
+  WiFi.mode(WIFI_STA);
 
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
   WiFi.begin(curSsid, curPass);
+  // Full 20 dBm transmit power on these ESP32-S3 boards, a metre from the hotspot, produced
+  // distorted uplink frames and retransmissions (ping up to 130 ms at -21 dBm RSSI, socket
+  // writes blocked for seconds). 11 dBm is plenty for a room and gives a clean uplink.
+  WiFi.setTxPower(WIFI_POWER_11dBm);
 
   socketClient.begin(curHost, curPort, WS_PATH);
   const String authHeader = String("Authorization: Bearer ") + curToken;
@@ -794,16 +892,36 @@ void networkTask(void *) {
   socketClient.enableHeartbeat(15000, 3000, 2);
 
   uint32_t lastWifiAttempt = millis(), lastSensor = 0;
+  // Open the setup hotspot after this long without a backend connection.
+  constexpr uint32_t PORTAL_AFTER_MS = 20000;
+  uint32_t lastBackendSeen = millis();
   bool hadWifi = false;
   bool buttonWasDown = false;
   uint32_t buttonDownAt = 0;
   static int32_t raw[MIC_SAMPLES * 2]; // interleaved stereo frames
   static int16_t pcm[MIC_SAMPLES];
 
+  uint32_t mark = millis();
+  // Records how long the part just finished took; keeps the slowest one per report.
+  auto lap = [&](const char *part) {
+    const uint32_t now = millis(), spent = now - mark;
+    mark = now;
+    if (spent > loopMaxMs) { loopMaxMs = spent; loopSlowPart = part; }
+  };
   for (;;) {
+    mark = millis();
     // 1. Luon luon phuc vu Web Dashboard tren dien thoai
-    if (dnsServer) dnsServer->processNextRequest();
-    if (configServer) configServer->handleClient();
+    if (connected) {
+      lastBackendSeen = millis();
+      stopPortal();
+    } else if (millis() - lastBackendSeen > PORTAL_AFTER_MS) {
+      startPortal();
+    }
+    if (portalOn) {
+      dnsServer->processNextRequest();
+      configServer->handleClient();
+    }
+    lap("portal");
 
     // 2. Kiem tra trang thai Wi-Fi & WebSocket
     const bool wifiReady = (WiFi.status() == WL_CONNECTED);
@@ -820,7 +938,9 @@ void networkTask(void *) {
           }
         }
       }
+      lap("wifi");
       socketClient.loop();
+      lap("ws_loop");
     } else {
       if (hadWifi) {
         socketClient.disconnect();
@@ -859,7 +979,9 @@ void networkTask(void *) {
     if (connected && serverBusy && millis() - lastServerMessage > 15000) {
       socketClient.disconnect(); // Recover from a stuck server; do not stay muted forever.
     }
+    lap("button");
     pumpSpeaker();
+    lap("speaker");
 
     // 4. Thu am micro
     size_t bytesRead = 0;
@@ -867,17 +989,108 @@ void networkTask(void *) {
     if (status == ESP_OK && bytesRead && connected && !serverBusy &&
         !(MUTE_MIC_DURING_PLAYBACK && speaking)) {
       const size_t count = readMic(raw, bytesRead / (2 * sizeof(int32_t)), pcm);
-      if (count) socketClient.sendBIN(reinterpret_cast<uint8_t *>(pcm), count * sizeof(int16_t));
+      if (count) {
+        const float level = chunkRms(pcm, count);
+        if (level > micPeakRms) micPeakRms = level;
+        micLevel = static_cast<int>(level);
+        if (!gateOpen && level < micNoiseFloor * 2) micNoiseFloor = micNoiseFloor * 0.995f + level * 0.005f;
+        if (level >= constrain(micNoiseFloor * 2.5f, MIC_GATE_MIN, MIC_GATE_MAX)) {
+          if (!gateOpen) { gateOpen = true; ++micOpenCount; flushPreroll(); }
+          gateCloseAt = millis() + GATE_HANGOVER_MS;
+        }
+        if (gateOpen) {
+          socketClient.sendBIN(reinterpret_cast<uint8_t *>(pcm), count * sizeof(int16_t));
+          if (static_cast<int32_t>(millis() - gateCloseAt) > 0) gateOpen = false;
+          micCapturing = gateOpen;
+        } else {
+          rememberPreroll(pcm, count);
+        }
+      }
+    } else if (!connected || serverBusy || speaking) {
+      resetVoiceGate(); // never replay audio captured before a turn or during playback
     }
+    lap("mic_send");
 
     // 5. Gui sensor DHT22
     if (connected && millis() - lastSensor >= 2000) {
       lastSensor = millis();
       sendSensor();
     }
+    lap("sensor");
 
     vTaskDelay(pdMS_TO_TICKS(2));
   }
+}
+
+/**
+ * Re-sends the SSD1306 128x64 configuration without switching the panel off. A glitch on the
+ * I2C wires (speaker current, loose jumper) can corrupt the multiplex/COM settings, which shows
+ * as horizontal stripes until a reboot; refreshing them every few seconds heals it silently.
+ */
+void refreshOledConfig() {
+  static const uint8_t config[] = {
+    0xD5, 0x80,   // clock divide
+    0xA8, 63,     // multiplex ratio: 64 rows
+    0xD3, 0x00,   // display offset
+    0x40,         // start line 0
+    0x8D, 0x14,   // charge pump on
+    0x20, 0x00,   // horizontal addressing
+    0xA1, 0xC8,   // segment remap, COM scan direction
+    0xDA, 0x12,   // COM pins for 128x64
+    0xD9, 0xF1, 0xDB, 0x40,
+    0xA4, 0xA6, 0x2E, 0xAF,  // resume RAM, normal, no scroll, display on
+  };
+  for (uint8_t c : config) display.ssd1306_command(c);
+}
+
+/**
+ * Status bar (rows 25-37), one clear state at a time, highest priority first:
+ *   DANG TRA LOI / PHAT NHAC  - the speaker is playing the answer
+ *   DANG XU LY ...            - the backend is recognising / thinking
+ *   DANG THU AM               - the microphone is recording you; the bar under it shows your level
+ *   NGHE LENH 9s              - say the next command without the name; the bar shrinks to zero
+ *   Goi: Tro ly oi            - idle, waiting for the assistant name (outlined, not filled)
+ * Filled (white) = the assistant is busy with you; outlined = idle.
+ */
+void drawStatusBar() {
+  const uint32_t now = millis();
+  const unsigned state = uiState.load();
+  const char *dots[] = {"   ", ".  ", ".. ", "..."};
+  const char *dot = dots[(now / 300) % 4];
+  char text[24];
+  bool active = true;
+  int bar = -1; // 0..128 progress under the status, -1 = plain separator line
+  const uint32_t followEnd = followUntilMs.load(), followTotal = followTotalMs.load();
+  const int32_t followLeft = followEnd ? static_cast<int32_t>(followEnd - now) : 0;
+  if (state == 3) snprintf(text, sizeof(text), "DANG TRA LOI%s", dot);
+  else if (state == 4) snprintf(text, sizeof(text), "PHAT NHAC%s", dot);
+  else if (state == 5) { snprintf(text, sizeof(text), "CO LOI - NOI LAI"); }
+  else if (serverBusy || state == 2) snprintf(text, sizeof(text), "DANG XU LY%s", dot);
+  else if (micCapturing) {
+    snprintf(text, sizeof(text), "DANG THU AM%s", dot);
+    bar = constrain(micLevel.load() / 8, 4, 128);
+  } else if (followLeft > 0 && followTotal) {
+    snprintf(text, sizeof(text), "NGHE LENH %lus", static_cast<unsigned long>((followLeft + 999) / 1000));
+    bar = static_cast<int>(128ULL * followLeft / followTotal);
+  } else {
+    active = false;
+    snprintf(text, sizeof(text), wakeRequired ? "Goi: Tro ly oi" : "SAN SANG NGHE");
+  }
+  if (active) {
+    display.fillRoundRect(0, 25, 92, 10, 2, SSD1306_WHITE);
+    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
+  } else {
+    display.drawRoundRect(0, 25, 92, 10, 2, SSD1306_WHITE);
+    display.setTextColor(SSD1306_WHITE);
+  }
+  display.setTextSize(1);
+  display.setCursor(3, 26);
+  display.print(text);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(96, 26);
+  display.print(ledEnabled.load() ? "D:BAT" : "D:TAT");
+  if (bar >= 0) display.fillRect(0, 35, bar, 1, SSD1306_WHITE);
+  else display.drawFastHLine(0, 35, 128, SSD1306_WHITE);
 }
 
 void hardwareTask(void *) {
@@ -886,9 +1099,13 @@ void hardwareTask(void *) {
   if (!hasDisplay) Serial.println("OLED initialization failed; continuing");
   dht.begin();
   uint32_t lastSensor = millis() - 2000;
-  uint32_t lastDisplay = 0, pageStartedAt = 0, generation = 0;
+  uint32_t lastDisplay = 0, pageStartedAt = 0, generation = 0, lastOledRefresh = millis();
   size_t currentPage = 0;
   for (;;) {
+    if (hasDisplay && millis() - lastOledRefresh >= 5000) {
+      lastOledRefresh = millis();
+      refreshOledConfig();
+    }
     if (millis() - lastSensor >= 2000) {
       lastSensor = millis();
       const float h = dht.readHumidity(), t = dht.readTemperature();
@@ -908,7 +1125,7 @@ void hardwareTask(void *) {
         if (!isOnline) {
           // ================= PROCESSING / CONNECTING SCREEN =================
           display.clearDisplay();
-          
+
           // 1. Top Banner
           display.fillRoundRect(0, 0, 128, 13, 2, SSD1306_WHITE);
           display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
@@ -963,7 +1180,6 @@ void hardwareTask(void *) {
           if (count) memcpy(bitmap, oledPages + currentPage * OLED_PAGE_BYTES, sizeof(bitmap));
           portEXIT_CRITICAL(&displayMux);
 
-          const char *states[] = {"MAT MANG", "DANG NGHE", "XU LY", "DANG NOI", "PHAT NHAC", "CO LOI"};
           display.clearDisplay();
           display.setTextSize(1);
           display.setTextColor(SSD1306_WHITE);
@@ -976,15 +1192,7 @@ void hardwareTask(void *) {
           display.setCursor(72, 9);
           if (valid) display.printf("%.0f%%", h);
           else display.print("--%");
-
-          display.setTextSize(1);
-          display.setCursor(0, 27);
-          display.print(states[min(unsigned(uiState.load()), 5u)]);
-          display.setCursor(62, 27);
-          display.printf("LED:%s", ledEnabled.load() ? "BAT" : "TAT");
-          display.setCursor(98, 27);
-          display.printf("%u/%u", count ? unsigned(currentPage + 1) : 0, unsigned(count));
-          display.drawFastHLine(0, 35, 128, SSD1306_WHITE);
+          drawStatusBar();
           if (count) display.drawBitmap(0, OLED_CONTENT_Y, bitmap, 128, OLED_CONTENT_HEIGHT, SSD1306_WHITE);
           else {
             display.setCursor(0, 42); display.print("Chua co hoi thoai");

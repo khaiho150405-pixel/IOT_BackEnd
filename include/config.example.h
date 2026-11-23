@@ -8,5 +8,5 @@ constexpr char WS_TOKEN[] = "CHANGE_ME_DEVICE_TOKEN_32_CHARS";
 constexpr unsigned char OLED_ADDRESS = 0x3C;
 constexpr unsigned short LED_COUNT = 1;
 constexpr unsigned char LED_BRIGHTNESS = 40;
-constexpr unsigned char MIC_SHIFT = 17;
+constexpr unsigned char MIC_SHIFT = 16; // 2x gain: speech at 20-30 cm was barely above VAD_RMS
 constexpr bool MUTE_MIC_DURING_PLAYBACK = true;

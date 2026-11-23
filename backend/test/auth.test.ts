@@ -103,3 +103,32 @@ test('older member/guest accounts become full accounts on start-up', async () =>
   assert.equal(users.find(u => u.username === 'oldguest')?.role, 'admin');
   assert.equal(await auth.authenticate(before.accessToken), undefined, 'old limited token no longer valid');
 });
+
+test('client address and "typed on this machine" cannot be faked through a tunnel or Host header', async () => {
+  const { clientIp, isDirectLocal, isPrivateClient } = await import('../src/auth/auth.guard');
+  const req = (ip: string, headers: Record<string, string> = {}) => ({ socket: { remoteAddress: ip }, headers });
+  // Typed on this machine.
+  assert.ok(isDirectLocal(req('127.0.0.1', { host: 'localhost:3000' })));
+  assert.ok(isDirectLocal(req('::ffff:127.0.0.1', { host: '127.0.0.1:3000' })));
+  // A tunnel connects from 127.0.0.1 but adds forwarding headers or a public host name.
+  assert.ok(!isDirectLocal(req('127.0.0.1', { host: 'localhost:3000', 'x-forwarded-for': '203.0.113.9' })));
+  assert.ok(!isDirectLocal(req('127.0.0.1', { host: 'abc.trycloudflare.com', 'cf-connecting-ip': '203.0.113.9' })));
+  assert.ok(!isDirectLocal(req('127.0.0.1', { host: 'room.example.com' })));
+  // Another machine saying "Host: localhost" is still not local.
+  assert.ok(!isDirectLocal(req('192.168.137.20', { host: 'localhost' })));
+  // Tunnel visitors keep their own address; the proxy-appended (last) entry wins over forged ones.
+  assert.equal(clientIp(req('127.0.0.1', { 'cf-connecting-ip': '203.0.113.9' })), '203.0.113.9');
+  assert.equal(clientIp(req('127.0.0.1', { 'x-forwarded-for': '1.2.3.4, 198.51.100.7' })), '198.51.100.7');
+  // Forwarding headers from a non-local socket are ignored (cannot pick someone else's address).
+  assert.equal(clientIp(req('192.168.137.20', { 'x-forwarded-for': '10.9.9.9' })), '192.168.137.20');
+  assert.ok(isPrivateClient(req('192.168.137.20')));
+  assert.ok(!isPrivateClient(req('203.0.113.9')));
+  assert.ok(!isPrivateClient(req('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' })));
+});
+
+test('guessing passwords across many usernames from one address is blocked', async () => {
+  const { auth } = await fresh();
+  for (let i = 0; i < 20; i++) assert.equal(await code(auth.login(`nobody${i}`, 'guess-123', '203.0.113.50')), 401);
+  assert.equal(await code(auth.login('owner', 'owner-pass-123', '203.0.113.50')), 429, 'address locked after 20 failures');
+  assert.equal(await code(auth.login('owner', 'owner-pass-123', '203.0.113.51')), 0, 'other addresses unaffected');
+});
