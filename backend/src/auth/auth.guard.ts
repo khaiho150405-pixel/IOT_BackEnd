@@ -52,6 +52,17 @@ export function clientIp(req: any): string {
 }
 
 /**
+ * Already HTTPS for the visitor: a tunnel on this machine (cloudflared, ngrok…) terminated
+ * TLS and says so in X-Forwarded-Proto / CF-Visitor. Trusted only from loopback, like clientIp;
+ * such requests must not be redirected to :3443, which the tunnel does not carry.
+ */
+export function isProxiedHttps(req: any): boolean {
+  if (process.env.TRUST_PROXY === 'false' || !LOOPBACK.has(socketIp(req))) return false;
+  const proto = String(req.headers?.['x-forwarded-proto'] || '').split(',')[0].trim().toLowerCase();
+  return proto === 'https' || /"scheme"\s*:\s*"https"/i.test(String(req.headers?.['cf-visitor'] || ''));
+}
+
+/**
  * A request typed on this very machine: loopback socket, addressed to localhost, and not
  * relayed by a proxy/tunnel. Used for first-account setup and to keep localhost on HTTP.
  */

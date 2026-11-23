@@ -2,7 +2,7 @@
 
 ## Sua loi da tim thay
 
-Windows co luat TCP Query User chan node.exe tren Private/Public. Block uu tien hon Allow TCP3000. Vi vay localhost/health OK khong chung minh dien thoai truy cap duoc.
+Windows co luat TCP Query User chan node.exe tren Private/Public. Block uu tien hon Allow TCP3100. Vi vay localhost/health OK khong chung minh dien thoai truy cap duoc.
 
 Mo PowerShell **Run as administrator**, chay:
 
@@ -11,7 +11,7 @@ Set-Location E:\AIoT\Code
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\fix-hotspot-firewall.ps1
 ```
 
-Script chi loai cong 3000 khoi luat TCP Query User Block cua dung Node hien tai, giu Block cac cong khac va UDP. Them Allow cho dung Node, TCP3000, IP laptop 192.168.137.1, client 192.168.137.0/24. Khong tat firewall. Neu doi ban Node, chay lai script.
+Script chi loai cong 3100 khoi luat TCP Query User Block cua dung Node hien tai, giu Block cac cong khac va UDP. Them Allow cho dung Node, TCP3100, IP laptop 192.168.137.1, client 192.168.137.0/24. Khong tat firewall. Neu doi ban Node, chay lai script.
 
 ## Moi lan demo
 
@@ -25,7 +25,7 @@ npm.cmd run build
 npm.cmd start
 ```
 
-4. Dien thoai noi AIOT: mo http://192.168.137.1:3000/health, phai thay status ok. Endpoint nay chi bao backend song, chua kiem tra Gemini.
+4. Dien thoai noi AIOT: mo http://192.168.137.1:3100/health, phai thay status ok. Endpoint nay chi bao backend song, chua kiem tra Gemini.
 5. ESP32 noi AIOT; monitor phai co WiFi=connected, WS=connected. Backend phai co WebSocket connected va Device hello accepted. Khong can nap lai neu config.h tren board da dung.
 6. Kiem tra Gemini that (2 request API, co the su dung quota tai khoan):
 

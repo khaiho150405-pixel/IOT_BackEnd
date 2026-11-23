@@ -3,7 +3,7 @@
 ESP32-S3 thu âm, hiển thị OLED, bật/tắt LED và đo nhiệt độ/độ ẩm. Toàn bộ phần AI chạy trên **máy AI worker** (laptop/PC Windows chạy backend):
 
 ```
-ESP32-S3 ──WebSocket (PCM 16 kHz)──▶ Backend NestJS (cổng 3000)
+ESP32-S3 ──WebSocket (PCM 16 kHz)──▶ Backend NestJS (cổng 3100)
                                       ├─ Voice bridge Python (127.0.0.1:8010)
                                       │    ├─ Nhận dạng tiếng Việt: PhoWhisper-base (VinAI), CPU int8
                                       │    ├─ Nhận biết + nhận dạng tiếng Anh: Whisper base
@@ -30,7 +30,7 @@ Mỗi lượt hội thoại: nói một câu, dừng ~1 giây; hệ thống nh�
 | `backend/requirements-model-convert.txt` | Gói Python chỉ dùng một lần để tạo model PhoWhisper |
 | `scripts/setup-phowhisper.py` | Tải và chuyển đổi PhoWhisper-base → `models/phowhisper-base-ct2` |
 | `scripts/start-local-xiaozhi.ps1` | Kiểm tra cấu hình, bật Ollama và chạy backend bằng một lệnh |
-| `scripts/fix-hotspot-firewall.ps1` | Mở TCP 3000, 3443 và UDP 5353 cho thiết bị trên Mobile Hotspot của Windows |
+| `scripts/fix-hotspot-firewall.ps1` | Mở TCP 3100, 3443, 1883 và UDP 5353 cho thiết bị trên Mobile Hotspot của Windows |
 | `models/` | Model đã chuyển đổi (tạo ra trên máy, không commit) |
 | `backend/data/` | Tài khoản (SQLite), khóa ký token, CA và chứng chỉ HTTPS (không commit, cần sao lưu) |
 | `backend/src/auth/`, `backend/src/network/` | Tài khoản (một loại) và chế độ khách; HTTPS nội bộ, mDNS, kênh live, PWA |
@@ -163,20 +163,20 @@ Backend sẵn sàng khi log hiện (5–90 giây tùy máy đã nạp model chư
 Local Whisper model ../models/phowhisper-base-ct2 ready.
 Local voice bridge ready at http://127.0.0.1:8010
 Local LLM ready; kept loaded for the demo.
-[AIoT] Server is listening at http://0.0.0.0:3000
+[AIoT] Server is listening at http://0.0.0.0:3100
 ```
 
 Cấp nguồn ESP32: log hiện `Device hello accepted: <MAC>`, OLED hiện `Listen` là có thể nói.
 
-**Lần đầu tiên:** mở `http://localhost:3000/dashboard` **trên chính máy AI worker** và tạo **tài khoản đầu tiên** (chỉ làm được từ máy này, và chỉ khi chưa có tài khoản nào). Sau đó dùng khu "Tài khoản" để tạo thêm tài khoản; người không đăng nhập vẫn xem được nhiệt độ, độ ẩm và trạng thái đèn.
+**Lần đầu tiên:** mở `http://localhost:3100/dashboard` **trên chính máy AI worker** và tạo **tài khoản đầu tiên** (chỉ làm được từ máy này, và chỉ khi chưa có tài khoản nào). Sau đó dùng khu "Tài khoản" để tạo thêm tài khoản; người không đăng nhập vẫn xem được nhiệt độ, độ ẩm và trạng thái đèn.
 
 ### Kiểm tra máy AI worker đã giống hệ thống gốc
 
 | Kiểm tra | Kết quả mong đợi |
 | --- | --- |
 | `cd backend; npm.cmd test` | toàn bộ test `pass`, `fail 0` |
-| `http://localhost:3000/health` | `{"status":"ok",...}` |
-| `http://localhost:3000/dashboard` | chưa đăng nhập: thấy ESP32 online, nhiệt độ/độ ẩm, trạng thái đèn; đăng nhập: thêm nút bật/tắt LED, chat AI |
+| `http://localhost:3100/health` | `{"status":"ok",...}` |
+| `http://localhost:3100/dashboard` | chưa đăng nhập: thấy ESP32 online, nhiệt độ/độ ẩm, trạng thái đèn; đăng nhập: thêm nút bật/tắt LED, chat AI |
 | Nói "Bật đèn lên" | log `[Qwen] ... intent=led_on`, LED bật, ESP32 nói "Em đã bật đèn, đại ca." |
 | Nói "Một cộng một bằng mấy" | ESP32 trả lời "1 cộng 1 bằng 2" |
 
@@ -188,17 +188,17 @@ Backend chạy song song hai cổng:
 
 | Cổng | Dùng cho |
 | --- | --- |
-| `3000` HTTP | ESP32 (`ws://…/aiot`), trang `/trust`, tải `/ca.crt`, truy cập ngay trên laptop (`localhost`) |
+| `3100` HTTP | ESP32 (`ws://…/aiot`), trang `/trust`, tải `/ca.crt`, truy cập ngay trên laptop (`localhost`) |
 | `3443` HTTPS | Trình duyệt trên điện thoại/máy khác: `https://aiot.local:3443/dashboard` |
 
-1. **Cài chứng chỉ (mỗi điện thoại một lần):** điện thoại vào cùng Wi-Fi, mở `http://<IP laptop>:3000/trust` → tải `aiot-smart-room-ca.crt` → làm theo hướng dẫn trên trang (Android: *Cài đặt chứng chỉ CA*; iPhone: cài hồ sơ rồi bật *Cài đặt tin cậy chứng nhận*). Backend tự tạo CA riêng trong `backend/data/tls` lần chạy đầu; chứng chỉ máy chủ tự cấp lại khi IP laptop đổi, **CA không đổi nên không phải cài lại**.
+1. **Cài chứng chỉ (mỗi điện thoại một lần):** điện thoại vào cùng Wi-Fi, mở `http://<IP laptop>:3100/trust` → tải `aiot-smart-room-ca.crt` → làm theo hướng dẫn trên trang (Android: *Cài đặt chứng chỉ CA*; iPhone: cài hồ sơ rồi bật *Cài đặt tin cậy chứng nhận*). Backend tự tạo CA riêng trong `backend/data/tls` lần chạy đầu; chứng chỉ máy chủ tự cấp lại khi IP laptop đổi, **CA không đổi nên không phải cài lại**.
 2. **Mở dashboard:** `https://aiot.local:3443/dashboard` (hoặc `https://<IP laptop>:3443/dashboard`). Mở bằng HTTP từ máy khác sẽ tự chuyển sang HTTPS; nếu chưa cài CA, trang hiện dải cảnh báo kèm link `/trust`.
 3. **Cài thành ứng dụng:** Android (Chrome) bấm nút **⬇ Cài ứng dụng** trên dashboard hoặc *⋮ → Cài đặt ứng dụng*; iPhone (Safari) *Chia sẻ → Thêm vào MH chính*. Ứng dụng mở thẳng dashboard, toàn màn hình, có biểu tượng riêng; khung giao diện được lưu để mở nhanh, dữ liệu luôn lấy trực tiếp.
 4. **Cập nhật tức thì:** dashboard nhận trạng thái thiết bị qua WebSocket `/api/live` (chấm xanh cạnh giờ cập nhật, trễ ≤ 0,5 s); mất kết nối thì tự kết nối lại và tạm hỏi định kỳ 2 giây.
 
 Ghi chú:
 - Tên `aiot.local` dùng mDNS: iPhone, macOS, Windows 10+ và phần lớn Android 12+ phân giải được; nếu không, dùng IP laptop. Đổi tên bằng `MDNS_NAME`.
-- Windows Firewall: cho phép Node.js trên mạng **Private** khi được hỏi; với Mobile Hotspot chạy `scripts\fix-hotspot-firewall.ps1` (Admin) để mở TCP 3000, 3443 và UDP 5353 chỉ cho dải hotspot.
+- Windows Firewall: cho phép Node.js trên mạng **Private** khi được hỏi; với Mobile Hotspot chạy `scripts\fix-hotspot-firewall.ps1` (Admin) để mở TCP 3100, 3443, 1883 và UDP 5353 chỉ cho dải hotspot.
 - Đây là HTTPS **trong mạng nội bộ**. Truy cập từ ngoài nhà là giai đoạn 3.
 
 ## Tài khoản và phân quyền
@@ -219,7 +219,8 @@ Chỉ có **một loại tài khoản** và **khách không cần tài khoản**
 - Mật khẩu băm bằng scrypt; dữ liệu nằm trong `backend/data/aiot.sqlite` (hoặc PostgreSQL nếu đặt `DATABASE_URL`), khóa ký token trong `backend/data/auth-secret`. **Sao lưu thư mục `backend/data/`**, không commit nó (đã có trong `.gitignore`).
 - **MQTT:** đăng nhập bằng cùng tên/mật khẩu; mọi tài khoản dùng được mọi topic (`aiot/#`, `aiot/device/<MAC>/led/set`, `.../command`…). Không có tài khoản thì broker từ chối. Topic dữ liệu (`.../sensor`, `.../state`) chỉ backend được gửi: gói giả mạo bị bỏ (không ngắt kết nối) và ghi nhật ký "Bị từ chối".
 - **Nhật ký** ghi: ai, lúc nào, nguồn (Web, App, Giọng nói, MQTT), thao tác, thiết bị, kết quả.
-- **Khi đưa ra Internet qua đường hầm** (cloudflared, ngrok…): tạo tài khoản đầu tiên **trước**. Việc tạo tài khoản đầu tiên chỉ nhận yêu cầu gõ trực tiếp trên laptop (`localhost`, không qua proxy), nên đường hầm không tạo được; trang `/api/network` không cho người ngoài mạng LAN biết IP nội bộ. Backend đọc địa chỉ thật của người truy cập từ `CF-Connecting-IP`/`X-Forwarded-For` (chỉ với kết nối từ chính laptop; tắt bằng `TRUST_PROXY=false`), để một người gõ sai mật khẩu không khóa luôn người khác. Mỗi địa chỉ sai 20 lần trong 15 phút (với bất kỳ tên đăng nhập nào) bị chặn 15 phút. Kênh trực tiếp dành tối đa `LIVE_MAX_GUESTS` (30) chỗ cho khách, mỗi địa chỉ tối đa `LIVE_MAX_PER_IP` (5) kết nối chưa đăng nhập; kết nối im lặng bị đóng sau 5 giây. Chỉ mở cổng HTTPS (3443) ra ngoài, **không** mở cổng 3000 (ESP32, token thiết bị đi dạng chưa mã hóa) và 1883 (MQTT).
+- **Đưa AIoT ra Internet (đường hầm riêng):** chạy `powershell -ExecutionPolicy Bypass -File scripts\start-public-tunnel.ps1` sau khi backend đã chạy. Script mở một Cloudflare Quick Tunnel **riêng** cho AIoT (tiến trình cloudflared riêng, không cần tài khoản, không đụng dịch vụ `Cloudflared` hay tên miền của dự án khác) và in địa chỉ `https://<tên-ngẫu-nhiên>.trycloudflare.com`. Địa chỉ đổi mỗi lần chạy lại; muốn tên miền cố định thì tạo **một named tunnel mới** trong tài khoản Cloudflare với một hostname chưa dùng cho dự án nào, trỏ về `http://localhost:3100`. Backend AIoT dùng cổng **3100** (cổng 3000 thuộc dịch vụ khác trên máy này).
+- **Khi đưa ra Internet qua đường hầm** (cloudflared, ngrok…): tạo tài khoản đầu tiên **trước**. Việc tạo tài khoản đầu tiên chỉ nhận yêu cầu gõ trực tiếp trên laptop (`localhost`, không qua proxy), nên đường hầm không tạo được; trang `/api/network` không cho người ngoài mạng LAN biết IP nội bộ. Backend đọc địa chỉ thật của người truy cập từ `CF-Connecting-IP`/`X-Forwarded-For` (chỉ với kết nối từ chính laptop; tắt bằng `TRUST_PROXY=false`), để một người gõ sai mật khẩu không khóa luôn người khác. Mỗi địa chỉ sai 20 lần trong 15 phút (với bất kỳ tên đăng nhập nào) bị chặn 15 phút. Kênh trực tiếp dành tối đa `LIVE_MAX_GUESTS` (30) chỗ cho khách, mỗi địa chỉ tối đa `LIVE_MAX_PER_IP` (5) kết nối chưa đăng nhập; kết nối im lặng bị đóng sau 5 giây. Nếu mở cổng trực tiếp trên router (không dùng đường hầm): chỉ mở HTTPS (3443), **không** mở 3100 (HTTP, token thiết bị đi dạng chưa mã hóa) và 1883 (MQTT). Đường hầm Cloudflare thì khác: Cloudflare đã mã hóa HTTPS phía Internet và chỉ nối vào `localhost:3100` trên máy này, nên trỏ vào 3100 là đúng.
 - Quên mật khẩu tài khoản đầu tiên: dừng backend, đổi tên `backend/data/aiot.sqlite` (dữ liệu cũ được giữ lại để tra cứu), khởi động lại và tạo tài khoản mới.
 
 API chính (gửi `Authorization: Bearer <accessToken>`; app di động gửi thêm `X-Client: app`):
@@ -239,7 +240,7 @@ Trình duyệt trên máy khác dùng HTTPS nội bộ (cổng 3443, xem mục D
 
 ## 3. Firmware ESP32-S3
 
-1. Sao chép `include\config.example.h` thành `include\config.h` rồi sửa `WIFI_SSID`, `WIFI_PASSWORD` (Wi-Fi 2.4 GHz), `WS_HOST` (IP LAN của máy AI worker, không dùng `localhost`, không có `ws://`), `WS_PORT=3000`, `WS_TOKEN` (trùng `DEVICE_TOKEN`).
+1. Sao chép `include\config.example.h` thành `include\config.h` rồi sửa `WIFI_SSID`, `WIFI_PASSWORD` (Wi-Fi 2.4 GHz), `WS_HOST` (IP LAN của máy AI worker, không dùng `localhost`, không có `ws://`), `WS_PORT=3100`, `WS_TOKEN` (trùng `DEVICE_TOKEN`).
 2. Giữ `MIC_SHIFT = 17` (đi cùng `VAD_RMS=325`). Giá trị 16 làm tiếng bị méo khi nói gần micro.
 3. Cắm ESP32-S3 vào cổng USB native, mở thư mục repo bằng VS Code + PlatformIO, chọn environment `esp32-s3-n16r8`, **Build** rồi **Upload**. Lệnh tương đương:
 
@@ -322,7 +323,7 @@ Nguồn qua hai thanh nguồn của breadboard, đi vòng mép trái bo (phía U
 
 | Hiện tượng | Cách xử lý |
 | --- | --- |
-| `Port 3000 is already in use` / `A local voice bridge is already running` | Backend cũ còn chạy: `Get-CimInstance Win32_Process \| Where-Object { $_.CommandLine -like '*dist/src/main.js*' -or $_.CommandLine -like '*local-voice-bridge.py*' } \| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }` |
+| `Port 3100 is already in use` / `A local voice bridge is already running` | Backend cũ còn chạy: `Get-CimInstance Win32_Process \| Where-Object { $_.CommandLine -like '*dist/src/main.js*' -or $_.CommandLine -like '*local-voice-bridge.py*' } \| ForEach-Object { Stop-Process -Id $_.ProcessId -Force }` |
 | `Local voice Python is missing` | Sai `LOCAL_VOICE_PYTHON` trong `backend/.env` (xem bước 5) |
 | `Whisper model directory is incomplete` | Chưa chạy `scripts\setup-phowhisper.py`, hoặc sai `LOCAL_WHISPER_MODEL` |
 | `FFmpeg is required` | Cài FFmpeg (bước 1) hoặc đặt `FFMPEG_EXE` trỏ tới `ffmpeg.exe` |

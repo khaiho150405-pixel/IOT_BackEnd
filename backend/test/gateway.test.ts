@@ -386,7 +386,10 @@ test('spoken turns need the assistant name, except right after an answer', async
     async speak() { return Buffer.alloc(640); },
     wakeRequired: () => true,
   };
-  const http = createServer(), gateway = new AiotGateway(ai as unknown as AiotService, new HistoryStore());
+  // MQTT retained state must follow every turn, or panels keep showing busy=true.
+  const mqttStates: any[] = [];
+  const mqtt = { setGateway() {}, publishState: (_id: string, state: any) => mqttStates.push(state), publishSensor() {}, publishChat() {} };
+  const http = createServer(), gateway = new AiotGateway(ai as unknown as AiotService, new HistoryStore(), mqtt as any);
   const shown: string[] = [];
   const show = (gateway as any).show.bind(gateway);
   (gateway as any).show = (s: any, text: string, answer?: string) => { shown.push(text); return show(s, text, answer); };
@@ -415,6 +418,8 @@ test('spoken turns need the assistant name, except right after an answer', async
   const states = messages.filter(m => m.state === 'listening');
   assert.deepEqual(states[0], { type: 'status', state: 'listening', wake: true, follow_ms: 0 });
   assert.ok(states[1].follow_ms > 2500 && states[1].follow_ms <= 3000, 'window announced after an answer');
+  assert.deepEqual(mqttStates.map(state => state.busy), [false, true, false, true, false],
+    'MQTT state: idle after hello, busy during each turn, idle again after it');
 
   answer = false; // overheard talk is ignored and opens no follow-up window
   await sleep(4800); // window (3 s) + the 1.56 s utterance the test sends at once

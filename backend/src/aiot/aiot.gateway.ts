@@ -158,7 +158,7 @@ export class AiotGateway implements OnModuleDestroy {
       const utterance = s.detector.push(filtered);
       if (utterance) {
         // Set busy synchronously, before any await. One request at a time/device.
-        s.busy = true; s.lastTurn = Date.now();
+        s.busy = true; s.lastTurn = Date.now(); this.publishBusy(s);
         this.stopFollowWindow(s);
         let energy = 0, peak = 0;
         for (let offset = 0; offset < utterance.length; offset += 2) {
@@ -275,7 +275,7 @@ export class AiotGateway implements OnModuleDestroy {
     if (!session) throw new Error('DEVICE_OFFLINE');
     if (session.busy || session.pending) throw new Error('DEVICE_BUSY');
     const controller = new AbortController();
-    session.busy = true;
+    session.busy = true; this.publishBusy(session);
     session.detector.reset();
     try {
       this.send(session, { type: 'status', state: 'thinking' });
@@ -283,7 +283,7 @@ export class AiotGateway implements OnModuleDestroy {
       return this.dashboardDevices().find(device => device.id === deviceId);
     } finally {
       session.detector.reset();
-      session.busy = false;
+      session.busy = false; this.publishBusy(session);
       if (session.ws.readyState === WebSocket.OPEN) this.sendListening(session);
     }
   }
@@ -375,7 +375,7 @@ export class AiotGateway implements OnModuleDestroy {
     if (session.busy || session.pending) throw new Error('DEVICE_BUSY');
 
     // Reserve the device before starting asynchronous AI work, just like VAD does.
-    session.busy = true;
+    session.busy = true; this.publishBusy(session);
     session.lastTurn = Date.now();
     session.detector.reset();
     return new Promise((resolve, reject) => {
@@ -519,7 +519,7 @@ export class AiotGateway implements OnModuleDestroy {
       clearTimeout(deadline);
       controller.abort();
       recoveryController?.abort();
-      s.detector.reset(); s.busy = false; s.controller = undefined;
+      s.detector.reset(); s.busy = false; s.controller = undefined; this.publishBusy(s);
       if (!readyReported) onReady?.();
       if (s.ws.readyState === WebSocket.OPEN) {
         try {
@@ -537,6 +537,11 @@ export class AiotGateway implements OnModuleDestroy {
    * required, counts it down on the OLED once per second; at zero the screen goes back to
    * the "call my name" hint. A new turn (busy) or disconnect stops the countdown.
    */
+  /** Keeps MQTT's retained state (busy, LED) in step with every turn start and end. */
+  private publishBusy(s: Session) {
+    if (s.id && s.ws.readyState === WebSocket.OPEN)
+      this.mqtt?.publishState(s.id, { connected: true, ledEnabled: s.ledEnabled, busy: s.busy });
+  }
   private wakeRequired(): boolean {
     return typeof this.ai.wakeRequired === 'function' && this.ai.wakeRequired();
   }

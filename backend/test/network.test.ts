@@ -19,11 +19,11 @@ async function freePort() {
   await new Promise<void>(resolve => reserve.close(() => resolve()));
   return port;
 }
-function get(url: string, options: { ca?: string; host?: string } = {}) {
+function get(url: string, options: { ca?: string; host?: string; headers?: Record<string, string> } = {}) {
   return new Promise<{ status: number; headers: any; body: Buffer }>((resolve, reject) => {
     const parsed = new URL(url);
     const request = (parsed.protocol === 'https:' ? httpsRequest : httpRequest)(parsed, {
-      ca: options.ca, headers: options.host ? { host: options.host } : {}, servername: 'localhost',
+      ca: options.ca, headers: { ...(options.host ? { host: options.host } : {}), ...options.headers }, servername: 'localhost',
     }, response => {
       const chunks: Buffer[] = [];
       response.on('data', c => chunks.push(c));
@@ -72,6 +72,14 @@ test('local HTTPS, certificate download, HTTPS redirect, PWA files and the live 
   assert.equal(remote.status, 302);
   assert.equal(remote.headers.location, `https://aiot.local:${httpsPort}/dashboard`);
   assert.equal((await get(`http://127.0.0.1:${port}/dashboard`)).status, 200);
+  // Through an HTTPS tunnel (cloudflared) the visitor already uses HTTPS: no redirect to :3443,
+  // which the tunnel does not carry. A plain-HTTP tunnel request is still redirected.
+  const viaHttpsTunnel = await get(`http://127.0.0.1:${port}/dashboard`,
+    { host: 'api.example.test', headers: { 'x-forwarded-for': '203.0.113.7', 'x-forwarded-proto': 'https', 'cf-visitor': '{"scheme":"https"}' } });
+  assert.equal(viaHttpsTunnel.status, 200);
+  const tunnelledHttp = await get(`http://127.0.0.1:${port}/dashboard`,
+    { host: 'api.example.test', headers: { 'x-forwarded-for': '203.0.113.7', 'x-forwarded-proto': 'http' } });
+  assert.equal(tunnelledHttp.status, 302);
   assert.equal((await get(`http://127.0.0.1:${port}/trust`, { host: `aiot.local:${port}` })).status, 200);
   const info = JSON.parse((await get(`http://127.0.0.1:${port}/api/network`)).body.toString());
   assert.equal(info.https, true);

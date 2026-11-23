@@ -108,6 +108,13 @@ void loadConfig() {
   String h = preferences.getString("host", WS_HOST);
   uint16_t pt = preferences.getUShort("port", WS_PORT);
   String tk = preferences.getString("token", WS_TOKEN);
+  // One-time migration: the backend moved from port 3000 (now another service on the
+  // laptop, published by its own tunnel) to 3100. A port saved from the setup page
+  // before that still says 3000.
+  if (preferences.getUChar("cfg_ver", 1) < 2) {
+    if (pt == 3000) { pt = WS_PORT; preferences.putUShort("port", pt); }
+    preferences.putUChar("cfg_ver", 2);
+  }
   preferences.end();
 
   strlcpy(curSsid, s.c_str(), sizeof(curSsid));

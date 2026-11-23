@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { AuthController } from './auth/auth.controller';
-import { AuthGuard, Require, clientIp, clientSource, currentUser, isDirectLocal, isPrivateClient } from './auth/auth.guard';
+import { AuthGuard, Require, clientIp, clientSource, currentUser, isDirectLocal, isPrivateClient, isProxiedHttps } from './auth/auth.guard';
 import { AuthService, AuthUser } from './auth/auth.service';
 import { AiotGateway } from './aiot/aiot.gateway';
 import { AiotService } from './aiot/aiot.service';
@@ -33,7 +33,7 @@ const network: { tls?: TlsMaterial; httpsPort: number; mdnsName?: string } = { h
  * phones need before they trust the certificate. HTTPS_REDIRECT=false disables this.
  */
 function redirectToHttps(req: any, response: any): boolean {
-  if (!network.tls || req.socket?.encrypted || isDirectLocal(req) || process.env.HTTPS_REDIRECT === 'false') return false;
+  if (!network.tls || req.socket?.encrypted || isProxiedHttps(req) || isDirectLocal(req) || process.env.HTTPS_REDIRECT === 'false') return false;
   const host = String(req.hostname || req.headers?.host || '').split(':')[0];
   response.redirect(302, `https://${host}:${network.httpsPort}${req.originalUrl || req.url}`);
   return true;
@@ -214,7 +214,7 @@ async function main() {
   await app.init();
   app.get(AiotGateway).attach(app.getHttpServer());
   app.get(LiveHub).attach(app.getHttpServer());
-  const port = Number(process.env.PORT || 3000);
+  const port = Number(process.env.PORT || 3100);
   const host = process.env.HOST || '0.0.0.0';
   await app.listen(port, host);
   console.log(`[AIoT] Server is listening at http://${host}:${port}`);

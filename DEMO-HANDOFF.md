@@ -68,7 +68,7 @@ npm.cmd run build
 npm.cmd start
 ```
 
-Giữ .env hiện có. GET http://localhost:3000/health chỉ kiểm tra server sống, không kiểm tra Gemini. Điện thoại và ESP32 cùng LAN phải truy cập được http://IP-MAY-BACKEND:3000/health. Kiểm tra firewall TCP3000 và AP isolation nếu LAN không truy cập được. Không mở cổng ra Internet để demo.
+Giữ .env hiện có. GET http://localhost:3100/health chỉ kiểm tra server sống, không kiểm tra Gemini. Điện thoại và ESP32 cùng LAN phải truy cập được http://IP-MAY-BACKEND:3100/health. Kiểm tra firewall TCP3100 và AP isolation nếu LAN không truy cập được. Không mở cổng ra Internet để demo.
 
 Ngắt mọi nguồn trước khi đấu lại từng module. Chân theo yêu cầu: DHT22=10; OLED SDA8/SCL9; WS2812 DATA11; INMP441 WS4/BCLK5/SD6 (L/R chọn kênh trái); MAX98357A LRC15/BCLK16/DIN17. Kiểm tra điện áp/nguồn theo module; GPIO ESP32 không chịu tín hiệu 5V. Không đấu ngoại vi GPIO19/20 khi dùng USB native.
 

@@ -318,7 +318,7 @@
       try { state.setupRequired = (await (await fetch('/api/auth/status', { cache: 'no-store' })).json()).setupRequired; } catch { }
       $('loginTitle').textContent = state.setupRequired ? 'Tạo tài khoản đầu tiên' : 'Đăng nhập';
       $('loginHint').textContent = state.setupRequired ?
-        'Lần đầu sử dụng: tạo tài khoản đầu tiên. Chỉ làm được trên chính máy chạy backend (mở http://localhost:3000/dashboard). Sau đó tài khoản nào cũng tạo thêm được tài khoản.' :
+        'Lần đầu sử dụng: tạo tài khoản đầu tiên. Chỉ làm được trên chính máy chạy backend (mở http://localhost:3100/dashboard). Sau đó tài khoản nào cũng tạo thêm được tài khoản.' :
         'Đăng nhập để điều khiển thiết bị và quản lý tài khoản. Không đăng nhập vẫn xem được nhiệt độ, độ ẩm và trạng thái đèn.';
       $('displayNameField').hidden = !state.setupRequired;
       $('loginPass').autocomplete = state.setupRequired ? 'new-password' : 'current-password';
