@@ -2,6 +2,10 @@ import { Inject, Injectable, OnModuleDestroy, OnModuleInit, Optional } from '@ne
 import { randomBytes } from 'node:crypto';
 import { Action, AuthService, AuthUser } from '../auth/auth.service';
 import { createServer, Server as NetServer } from 'node:net';
+import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import { WebSocketServer, createWebSocketStream } from 'ws';
+import { clientIp } from '../auth/auth.guard';
+import { routeUpgrade } from '../network/upgrade';
 import { Aedes } from 'aedes';
 import * as mqtt from 'mqtt';
 import type { MqttClient } from 'mqtt';
@@ -44,6 +48,12 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
   // The backend's own client signs in to the embedded broker with a per-process secret.
   private readonly internalUser = '__aiot_backend__';
   private readonly internalPassword = randomBytes(24).toString('base64url');
+  private wsServer?: WebSocketServer;
+  private wsClients = 0;
+  // Home Assistant MQTT Discovery (HA_DISCOVERY=false turns it off).
+  private readonly discoveryPrefix = (process.env.HA_DISCOVERY_PREFIX || 'homeassistant').replace(/[^a-zA-Z0-9_-]/g, '');
+  private readonly discoveryEnabled = process.env.HA_DISCOVERY !== 'false';
+  private discovered = new Set<string>();
 
   constructor(@Optional() @Inject(AuthService) private auth?: AuthService) {}
 
@@ -100,6 +110,33 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * MQTT over WebSocket at /mqtt on the backend's HTTP/HTTPS servers, so MQTT apps and Home
+   * Assistant can connect from the Internet through the HTTPS tunnel
+   * (wss://<domain>/mqtt). Same embedded broker, same account sign-in and permissions as
+   * TCP 1883; at most MQTT_WS_MAX_CLIENTS (default 50) connections.
+   */
+  attachWebSocket(server: HttpServer) {
+    if (!this.broker || process.env.MQTT_WS_ENABLED === 'false') return;
+    if (!this.wsServer) {
+      const max = Number(process.env.MQTT_WS_MAX_CLIENTS || 50);
+      this.wsServer = new WebSocketServer({
+        noServer: true, maxPayload: 256 * 1024,
+        // MQTT clients ask for the "mqtt" (or legacy "mqttv3.1") subprotocol.
+        handleProtocols: protocols => protocols.has('mqtt') ? 'mqtt' : protocols.has('mqttv3.1') ? 'mqttv3.1' : false,
+      });
+      this.wsServer.on('connection', (ws, req: IncomingMessage) => {
+        if (this.wsClients >= max) { ws.close(1013, 'busy'); return; }
+        this.wsClients++;
+        ws.once('close', () => { this.wsClients--; });
+        const stream = createWebSocketStream(ws);
+        stream.on('error', () => ws.terminate());
+        this.broker.handle(stream, req);
+      });
+    }
+    routeUpgrade(server, '/mqtt', this.wsServer);
+  }
+
   private async connectClient(url: string): Promise<void> {
     try {
       const opts: mqtt.IClientOptions = {
@@ -143,6 +180,8 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
       'aiot/device/+/command',
       'aiot/led/set',
       'aiot/device/+/led/set',
+      // Home Assistant announces itself here after a restart: re-send the discovery configs.
+      ...(this.discoveryEnabled ? [`${this.discoveryPrefix}/status`] : []),
     ];
     for (const t of topics) {
       this.client.subscribe(t, { qos: 1 }, err => {
@@ -166,6 +205,7 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
 
   publishState(deviceId: string, state: { connected: boolean; ledEnabled?: boolean; busy?: boolean }) {
     if (!this.client || !this.client.connected) return;
+    if (state.connected && !this.discovered.has(deviceId)) this.publishDiscovery(deviceId);
     const payload = JSON.stringify({
       deviceId,
       connected: state.connected,
@@ -207,6 +247,48 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
     this.client.publish('aiot/response', payload, { qos: 1 });
   }
 
+  /**
+   * Home Assistant MQTT Discovery: one HA device per ESP32 with a light (LED), temperature and
+   * humidity sensors, connectivity and "busy" binary sensors, the last AI reply, and a text box
+   * to ask the assistant. Retained configs under <prefix>/<component>/<node>/<object>/config;
+   * every entity uses the existing aiot/device/<id>/... topics, so nothing else changes.
+   */
+  publishDiscovery(deviceId: string) {
+    if (!this.discoveryEnabled || !this.client || !this.client.connected) return;
+    this.discovered.add(deviceId);
+    const node = 'aiot_' + deviceId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const base = `aiot/device/${deviceId}`;
+    const device = {
+      identifiers: [node], name: `AIoT Smart Room ${deviceId.slice(-5)}`,
+      manufacturer: 'AIoT Smart Room', model: 'ESP32-S3 N16R8 voice assistant',
+      connections: /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(deviceId) ? [['mac', deviceId.toLowerCase()]] : undefined,
+    };
+    const availability = {
+      availability_topic: `${base}/state`,
+      availability_template: "{{ 'online' if value_json.connected else 'offline' }}",
+    };
+    const entities: Array<[string, string, Record<string, unknown>]> = [
+      ['light', 'led', { name: 'Đèn', command_topic: `${base}/led/set`, state_topic: `${base}/led/status`,
+        payload_on: 'ON', payload_off: 'OFF', ...availability }],
+      ['sensor', 'temperature', { name: 'Nhiệt độ', state_topic: `${base}/sensor`, device_class: 'temperature',
+        unit_of_measurement: '°C', state_class: 'measurement', value_template: '{{ value_json.temperature | round(1) }}', ...availability }],
+      ['sensor', 'humidity', { name: 'Độ ẩm', state_topic: `${base}/sensor`, device_class: 'humidity',
+        unit_of_measurement: '%', state_class: 'measurement', value_template: '{{ value_json.humidity | round(1) }}', ...availability }],
+      ['binary_sensor', 'online', { name: 'Kết nối', state_topic: `${base}/state`, device_class: 'connectivity',
+        value_template: "{{ 'ON' if value_json.connected else 'OFF' }}" }],
+      ['binary_sensor', 'busy', { name: 'Đang xử lý', state_topic: `${base}/state`, icon: 'mdi:robot',
+        value_template: "{{ 'ON' if value_json.busy else 'OFF' }}", ...availability }],
+      ['sensor', 'reply', { name: 'Trả lời gần nhất', state_topic: `${base}/chat`, icon: 'mdi:message-reply-text',
+        value_template: '{{ value_json.reply[:250] }}' }],
+      ['text', 'ask', { name: 'Hỏi trợ lý', command_topic: `${base}/command`, icon: 'mdi:chat-question', max: 200,
+        command_template: '{"action": "text", "text": {{ value | tojson }}}', ...availability }],
+    ];
+    for (const [component, object, config] of entities) {
+      const payload = JSON.stringify({ ...config, unique_id: `${node}_${object}`, device });
+      this.client.publish(`${this.discoveryPrefix}/${component}/${node}/${object}/config`, payload, { qos: 1, retain: true });
+    }
+  }
+
   private publishSystemStatus(status: 'online' | 'offline') {
     if (!this.client || !this.client.connected) return;
     const payload = JSON.stringify({
@@ -230,7 +312,8 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
       return done(ok ? null : Object.assign(new Error('Bad credentials'), { returnCode: 4 }), ok);
     }
     if (!username || !password) return done(Object.assign(new Error('Login required'), { returnCode: 4 }), false);
-    const ip = String(client?.conn?.remoteAddress || '').replace(/^::ffff:/, '');
+    // TCP: the socket address. WebSocket (/mqtt): the visitor address the tunnel reports.
+    const ip = client?.req ? clientIp(client.req) : String(client?.conn?.remoteAddress || '').replace(/^::ffff:/, '');
     this.auth!.checkCredentials(username, password.toString(), ip).then(user => {
       client.aiotUser = this.auth!.toAuthUser(user);
       void this.auth!.audit({ user: client.aiotUser, source: 'mqtt', action: 'auth:login', ip });
@@ -258,6 +341,9 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
     if (!client || client.aiotInternal) return callback(null);
     const user: AuthUser | undefined = client.aiotUser;
     const topic = String(packet.topic || '');
+    // Home Assistant's birth/last-will message (signed-in account only); it only triggers a
+    // re-send of the discovery configs.
+    if (user && this.discoveryEnabled && topic === `${this.discoveryPrefix}/status`) return callback(null);
     const payload = Buffer.isBuffer(packet.payload) ? packet.payload.toString('utf8') : String(packet.payload ?? '');
     const action = this.requiredAction(topic, payload);
     const deviceId = action ? this.resolveDeviceId(topic) : undefined;
@@ -304,6 +390,10 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async handleIncomingMessage(topic: string, raw: string) {
+    if (this.discoveryEnabled && topic === `${this.discoveryPrefix}/status`) {
+      if (raw.trim() === 'online') for (const device of this.gateway?.dashboardDevices() ?? []) this.publishDiscovery(device.id);
+      return;
+    }
     console.log(`[MQTT] Incoming on ${topic}: ${raw.slice(0, 150)}`);
     const deviceId = this.resolveDeviceId(topic);
     if (!deviceId) {

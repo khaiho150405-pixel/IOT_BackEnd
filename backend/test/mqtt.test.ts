@@ -163,3 +163,76 @@ test('embedded broker requires an account; every account may control every devic
   assert.ok(audit.some(e => e.source === 'mqtt' && e.username === 'friend' && e.result === 'ok' && e.deviceId === 'dev-b'));
   await f.endAsync(); await o.endAsync();
 });
+
+test('MQTT over WebSocket (/mqtt) and Home Assistant discovery', async t => {
+  process.env.AUTH_DB_FILE = ':memory:';
+  delete process.env.DATABASE_URL;
+  process.env.MQTT_PORT = '18840';
+  process.env.MQTT_EMBEDDED_BROKER = 'true';
+  const { AuthService } = await import('../src/auth/auth.service');
+  const { createServer } = await import('node:http');
+  const auth = new AuthService();
+  await auth.ready();
+  await auth.setup({ username: 'homeassistant', password: 'home-assistant-1' });
+  const id = '7C:4F:AD:2B:3D:70';
+  const leds: boolean[] = [], texts: string[] = [];
+  const gateway: any = {
+    dashboardDevices: () => [{ id, connected: true, ledEnabled: false }],
+    async setDashboardLed(_d: string, enabled: boolean) { leds.push(enabled); return {}; },
+    async submitDashboardText(_d: string, text: string) { texts.push(text); return { transcript: text, reply: 'ok', language: 'vi', intent: 'chat' }; },
+  };
+  const service = new AiotMqttService(auth);
+  service.setGateway(gateway);
+  await service.onModuleInit();
+  const http = createServer();
+  service.attachWebSocket(http);
+  await new Promise<void>(r => http.listen(0, '127.0.0.1', () => r()));
+  const url = `ws://127.0.0.1:${(http.address() as any).port}/mqtt`;
+  t.after(async () => { await service.onModuleDestroy(); http.close(); await auth.onModuleDestroy(); });
+  const connect = (username?: string, password?: string) => new Promise<mqtt.MqttClient | Error>(resolve => {
+    const c = mqtt.connect(url, { username, password, reconnectPeriod: 0, connectTimeout: 3000 });
+    c.once('connect', () => resolve(c));
+    c.once('error', e => { c.end(true); resolve(e); });
+  });
+  const pause = (ms = 300) => new Promise(r => setTimeout(r, ms));
+
+  // Same account rules as TCP 1883.
+  assert.ok(await connect() instanceof Error, 'anonymous WebSocket clients are refused');
+  const ha = await connect('homeassistant', 'home-assistant-1') as mqtt.MqttClient;
+  assert.ok(!(ha instanceof Error), 'an account signs in over WebSocket');
+  const configs = new Map<string, any>();
+  ha.on('message', (topic, payload) => { if (topic.endsWith('/config')) configs.set(topic, JSON.parse(payload.toString())); });
+  await ha.subscribeAsync('homeassistant/#');
+
+  // The device comes online: one HA device with seven entities, retained.
+  service.publishState(id, { connected: true, ledEnabled: false, busy: false });
+  await pause();
+  const node = 'aiot_7c4fad2b3d70';
+  assert.deepEqual([...configs.keys()].sort(), ['binary_sensor/busy', 'binary_sensor/online', 'light/led', 'sensor/humidity',
+    'sensor/reply', 'sensor/temperature', 'text/ask'].map(k => `homeassistant/${k.split('/')[0]}/${node}/${k.split('/')[1]}/config`).sort());
+  const light = configs.get(`homeassistant/light/${node}/led/config`);
+  assert.equal(light.command_topic, `aiot/device/${id}/led/set`);
+  assert.equal(light.state_topic, `aiot/device/${id}/led/status`);
+  assert.equal(light.unique_id, `${node}_led`);
+  assert.deepEqual(light.device.connections, [['mac', id.toLowerCase()]]);
+  assert.equal(configs.get(`homeassistant/sensor/${node}/temperature/config`).device_class, 'temperature');
+
+  // HA switching the light and asking the assistant reach the device.
+  ha.publish(light.command_topic, light.payload_on);
+  const ask = configs.get(`homeassistant/text/${node}/ask/config`);
+  ha.publish(ask.command_topic, '{"action": "text", "text": "Nhiệt độ phòng?"}');
+  await pause();
+  assert.deepEqual(leds, [true]);
+  assert.deepEqual(texts, ['Nhiệt độ phòng?']);
+
+  // After an HA restart (birth message) the configs are sent again.
+  configs.clear();
+  ha.publish('homeassistant/status', 'online');
+  await pause();
+  assert.equal(configs.size, 7, 'discovery re-sent on the HA birth message');
+  // Accounts still cannot forge discovery configs.
+  ha.publish(`homeassistant/light/${node}/led/config`, '{"name":"fake"}');
+  await pause();
+  assert.notEqual(configs.get(`homeassistant/light/${node}/led/config`)?.name, 'fake');
+  await ha.endAsync();
+});

@@ -320,6 +320,12 @@ Nguồn qua hai thanh nguồn của breadboard, đi vòng mép trái bo (phía U
   - `aiot/device/<MAC>/sensor`, `.../state`, `.../chat`: nhận cảm biến, trạng thái, hội thoại.
   - Thử nhanh (bằng một tài khoản bất kỳ): `$env:MQTT_USER='...'; $env:MQTT_PASS='...'; node backend/scripts/mqtt-client-demo.js [on|off|ask|monitor]`.
   - Broker ngoài (`MQTT_BROKER_URL`) không được backend kiểm soát quyền; hãy cấu hình quyền trên broker đó.
+  - **Từ Internet (MQTT qua WebSocket):** `wss://aiot.eduscore.id.vn/mqtt` (cổng 443, TLS, đường dẫn `/mqtt`), cùng broker, cùng tài khoản và quyền như cổng 1883. Trong app MQTT chọn giao thức *WebSocket Secure* (`wss`), host `aiot.eduscore.id.vn`, port `443`, path `/mqtt`. Trong mạng LAN dùng `ws://<IP laptop>:3100/mqtt` hoặc TCP `<IP laptop>:1883`. Tối đa `MQTT_WS_MAX_CLIENTS` (50) kết nối; tắt bằng `MQTT_WS_ENABLED=false`.
+- **Home Assistant** (tự nhận thiết bị qua MQTT Discovery):
+  1. Tạo một tài khoản riêng cho Home Assistant trong khu "Tài khoản" của dashboard (ví dụ `homeassistant`).
+  2. Home Assistant → *Settings → Devices & services → Add integration → MQTT*. Cùng mạng LAN: broker `192.168.137.1`, port `1883`. Từ Internet: broker `aiot.eduscore.id.vn`, port `443`, *Advanced options* → transport `websockets`, WebSocket path `/mqtt`, *Broker certificate validation*: Auto, *Use a client certificate*: tắt. Username/password là tài khoản vừa tạo.
+  3. Thiết bị **AIoT Smart Room <MAC>** tự xuất hiện với: đèn (bật/tắt), nhiệt độ, độ ẩm, kết nối, "đang xử lý", câu trả lời gần nhất và ô "Hỏi trợ lý" (gõ câu như trên dashboard). Dùng được trong dashboard, automation và trợ lý giọng nói của Home Assistant.
+  - Cấu hình discovery được giữ lại (retained) trên `homeassistant/<loại>/aiot_<mac>/<thực thể>/config` và gửi lại khi Home Assistant khởi động (`homeassistant/status` = `online`). Tài khoản không ghi đè được các cấu hình này. Tắt bằng `HA_DISCOVERY=false`; đổi tiền tố bằng `HA_DISCOVERY_PREFIX`.
 
 ## 6. Xử lý sự cố
 

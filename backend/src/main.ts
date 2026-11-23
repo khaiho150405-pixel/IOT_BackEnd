@@ -214,6 +214,7 @@ async function main() {
   await app.init();
   app.get(AiotGateway).attach(app.getHttpServer());
   app.get(LiveHub).attach(app.getHttpServer());
+  app.get(AiotMqttService).attachWebSocket(app.getHttpServer());
   const port = Number(process.env.PORT || 3100);
   const host = process.env.HOST || '0.0.0.0';
   await app.listen(port, host);
@@ -228,6 +229,7 @@ async function main() {
     network.tls = ensureTls(process.env.TLS_DIR || join(process.cwd(), 'data', 'tls'), mdnsLabel);
     httpsServer = createHttpsServer({ key: network.tls.key, cert: network.tls.cert }, app.getHttpAdapter().getInstance());
     app.get(LiveHub).attach(httpsServer);
+    app.get(AiotMqttService).attachWebSocket(httpsServer);
     await new Promise<void>((resolve, reject) => {
       httpsServer!.once('error', reject);
       httpsServer!.listen(network.httpsPort, host, () => resolve());
