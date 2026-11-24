@@ -179,7 +179,7 @@ Trong quá trình hiện thực hóa đồ án, nhóm đã rà soát, tái cấu
 | **Kích hoạt giọng nói** | Nghe liên tục mọi câu. | **Gọi tên "Trợ lý ơi"** + 10 s nghe tiếp; câu không gọi tên bị bỏ qua lặng lẽ. | Không kích hoạt nhầm khi người trong phòng nói chuyện, giống trợ lý thương mại. |
 | **Giao thức truyền thông** | REST API HTTP cơ bản. | **WebSocket nhị phân** cho âm thanh PCM16 hai chiều; **MQTT nhúng** (TCP 1883 và WebSocket `/mqtt`) cho trạng thái, cảm biến, điều khiển; **Home Assistant Discovery**. | Đúng chuẩn IoT, tích hợp được app MQTT và Home Assistant từ LAN lẫn Internet. |
 | **Bảo vệ truy cập** | Không có. | **Tài khoản** (mật khẩu băm scrypt, phiên JWT có làm mới), khách chỉ xem, nhật ký thao tác, chống dò mật khẩu theo địa chỉ. | Ai có tài khoản mới điều khiển được; truy vết được mọi thao tác. |
-| **Triển khai & truy cập từ xa** | Chỉ chạy trong mạng LAN. | **Tên miền cố định** qua đường hầm Cloudflare riêng (HTTPS); tự khởi động khi bật máy, tự chạy lại khi lỗi; ESP32 dùng được ở Wi-Fi bất kỳ qua `wss://`. | Dùng hằng ngày được, không cần ngồi canh hay mở cổng router. |
+| **Triển khai & truy cập từ xa** | Chỉ chạy trong mạng LAN. | **Tên miền cố định** qua đường hầm Cloudflare riêng (HTTPS); khởi động bằng một file `.bat`, tự chạy lại khi lỗi; ESP32 dùng được ở Wi-Fi bất kỳ qua `wss://`. | Dùng hằng ngày được, không cần ngồi canh hay mở cổng router. |
 | **Cấu hình kết nối Wi-Fi** | Cố định tên & mật khẩu Wi-Fi trong mã nguồn. | **SoftAP Captive Portal** (192.168.4.1) lưu NVS, chỉ bật khi không vào được backend; giữ nút BOOT 3 giây để xóa cấu hình. | Đổi mạng không cần nạp lại code; điểm phát không mở thường trực. |
 | **Âm thanh & Chống lặp (Echo)** | Chưa có cơ chế ngăn loa phát ngược vào micro. | **Half-Duplex Echo Prevention:** tắt micro khi loa phát, chờ `playback_done` mới mở lại. | Ngăn hiện tượng AI tự nghe giọng mình. |
 | **Hiển thị giao tiếp OLED** | In chữ tiếng Anh không dấu. | **Bitmap tiếng Việt có dấu** 128x28 phân trang + **thanh trạng thái** (chờ gọi tên / nghe lệnh + đếm ngược / thu âm / xử lý / trả lời). | Người dùng biết rõ hệ thống đang làm gì. |
@@ -256,7 +256,7 @@ Backend trung tâm xây dựng trên **NestJS**, chia module:
    - **Google Gemini** qua REST API: gửi trực tiếp âm thanh lên Gemini (đa phương thức) để nhận dạng và trả lời trong một bước; bật bằng `AI_PROVIDER=gemini`.
 
 ## 3.3. Triển khai, vận hành và bảo mật
-- **Tự khởi động:** Tác vụ Windows "AIoT Smart Room" chạy trình giám sát khi người dùng đăng nhập: mở Ollama nếu chưa chạy, chạy Backend và tự chạy lại khi Backend thoát hoặc lỗi, chạy đường hầm Internet và tự chạy lại khi nó tắt; ghi log trong `backend/logs`.
+- **Khởi động bằng một file:** bấm đúp `Khoi-dong-AIoT.bat` để chạy trình giám sát (hệ thống không tự chạy khi bật máy): mở Ollama nếu chưa chạy, chạy Backend và tự chạy lại khi Backend thoát hoặc lỗi, chạy đường hầm Internet và tự chạy lại khi nó tắt; ghi log trong `backend/logs`. Tắt bằng cách đóng cửa sổ hoặc chạy `Tat-AIoT.bat`; Backend, voice bridge và đường hầm được gắn vào một Job Object của Windows nên tự dừng theo trình giám sát, không để lại tiến trình mồ côi.
 - **Truy cập từ Internet:** Đường hầm Cloudflare riêng `aiot-smart-room` đưa `https://aiot.eduscore.id.vn` về `localhost:3100`. Không cần mở cổng router; Cloudflare cung cấp HTTPS; backend đọc đúng địa chỉ thật của người truy cập (để chống dò mật khẩu theo từng người).
 - **Bảo mật:**
   - Tài khoản đầu tiên chỉ tạo được trên chính máy chủ (không qua Internet); các tài khoản sau do người đã có tài khoản tạo.
@@ -436,7 +436,7 @@ Phần mềm sử dụng đều miễn phí: Ollama, Qwen 2.5, PhoWhisper, NestJ
 | **Tuần 4** | - Wi-Fi SoftAP Captive Portal trên ESP32.<br>- Web Control Desk và Mobile Web App (`/mobile`).<br>- Phân trang bitmap tiếng Việt 128x28 trên OLED. | Đỗ Trọng Vĩ,<br>Phan Đức Thể,<br>Trần Quốc Việt | Đổi mạng bằng điện thoại; OLED hiển thị tiếng Việt có dấu. |
 | **Tuần 5** | - Hoàn thiện Half-Duplex Echo Prevention (`playback_done`).<br>- Tối ưu luồng xử lý lệnh thiết bị.<br>- Viết bộ kiểm thử tự động cho các module Backend. | Hồ Sĩ Khải,<br>Trần Quốc Việt | Hết hiện tượng AI tự nghe giọng mình và tự nói liên tục. |
 | **Tuần 6** | - Lắp ráp mô hình sa bàn.<br>- Đo đạc độ trễ, thử nghiệm hoạt động.<br>- Soạn báo cáo và slide. | Toàn thể 7 thành viên | Hệ thống vận hành ổn định trong phòng lab. |
-| **Giai đoạn hoàn thiện** | - Đổi chân đấu dây không bắt chéo, sửa OLED bị sọc.<br>- Tìm và sửa nguyên nhân phản hồi chậm (vòng lặp mạng treo tới 10 s).<br>- Gọi tên "Trợ lý ơi", nghe tiếp 10 s, thanh trạng thái OLED.<br>- Tài khoản, khách chỉ xem, an toàn khi đưa ra Internet.<br>- Tên miền cố định, tự khởi động, MQTT qua WebSocket, Home Assistant, ESP32 kết nối `wss://`. | Hồ Sĩ Khải | Kiểm thử tự động 40/40, kiểm tra đồng bộ chéo 11/11; hệ thống chạy qua `https://aiot.eduscore.id.vn`. |
+| **Giai đoạn hoàn thiện** | - Đổi chân đấu dây không bắt chéo, sửa OLED bị sọc.<br>- Tìm và sửa nguyên nhân phản hồi chậm (vòng lặp mạng treo tới 10 s).<br>- Gọi tên "Trợ lý ơi", nghe tiếp 10 s, thanh trạng thái OLED.<br>- Tài khoản, khách chỉ xem, an toàn khi đưa ra Internet.<br>- Tên miền cố định, khởi động bằng một file, MQTT qua WebSocket, Home Assistant, ESP32 kết nối `wss://`. | Hồ Sĩ Khải | Kiểm thử tự động 40/40, kiểm tra đồng bộ chéo 11/11; hệ thống chạy qua `https://aiot.eduscore.id.vn`. |
 
 ---
 
@@ -518,7 +518,7 @@ Các số liệu dưới đây được đo trên hệ thống thật (laptop GP
 3. **Gọi tên trợ lý** và **thanh trạng thái OLED** đưa trải nghiệm gần với trợ lý thương mại; AI hiểu câu nói tự nhiên nhưng code luôn kiểm chứng trước khi điều khiển thiết bị.
 4. Tìm ra và xử lý tận gốc nguyên nhân phản hồi chậm (bộ đệm TCP đầy làm treo vòng lặp mạng), đưa thời gian từ lúc nói xong tới lúc đèn bật về ~2,7 s.
 5. Triển khai **MQTT chuẩn công nghiệp** cả trong LAN và qua Internet, tích hợp **Home Assistant** tự động; Web, MQTT, giọng nói và thiết bị luôn đồng bộ.
-6. Đưa hệ thống ra Internet **an toàn** với tài khoản, tên miền cố định và đường hầm riêng; tự khởi động và tự phục hồi khi lỗi.
+6. Đưa hệ thống ra Internet **an toàn** với tài khoản, tên miền cố định và đường hầm riêng; khởi động bằng một file và tự phục hồi khi lỗi.
 
 ## 8.2. Hạn chế hiện tại
 - **Bán song công (Half-Duplex):** micro bị khóa khi loa phát để chống dội âm, nên người dùng chưa chen ngang được bằng giọng nói (có thể nhấn nút BOOT để ngắt).
@@ -563,9 +563,9 @@ Hướng dẫn đầy đủ nằm trong `README.md` và `KHOI-DONG-THU-CONG.md` 
 2. **Build:** `cd backend` → `npm install` → `npm run build`.
 3. **Tạo tài khoản đầu tiên:** mở `http://localhost:3100/dashboard` trên chính máy chủ.
 4. **Tường lửa cho hotspot (chạy một lần bằng quyền Admin):** `scripts\fix-hotspot-firewall.ps1` (mở TCP 3100, 3443, 1883 và UDP 5353 cho dải `192.168.137.0/24`).
-5. **Tự khởi động:** `scripts\install-autostart.ps1 -StartNow` (không cần Admin). Từ đó, mỗi lần đăng nhập Windows: Ollama, Backend (cổng 3100, HTTPS 3443, MQTT 1883) và đường hầm Internet tự chạy.
+5. **Khởi động:** bấm đúp `Khoi-dong-AIoT.bat` (không cần Admin): Ollama, Backend (cổng 3100, HTTPS 3443, MQTT 1883) và đường hầm Internet chạy; giữ cửa sổ mở trong lúc dùng. Tắt: đóng cửa sổ hoặc bấm đúp `Tat-AIoT.bat`.
 6. **Tên miền cố định (một lần):** `scripts\setup-named-tunnel.ps1 -Hostname aiot.eduscore.id.vn` (đăng nhập Cloudflare trên trình duyệt).
-7. **Mỗi lần dùng:** bật laptop, đăng nhập Windows, cấp nguồn ESP32 (ESP32 vào Wi-Fi 2.4 GHz của router và kết nối qua tên miền; không cần Mobile Hotspot). Kiểm tra: `http://127.0.0.1:3100/api/public/devices` có `"connected": true`.
+7. **Mỗi lần dùng:** bật laptop, bấm đúp `Khoi-dong-AIoT.bat`, cấp nguồn ESP32 (ESP32 vào Wi-Fi 2.4 GHz của router và kết nối qua tên miền; không cần Mobile Hotspot). Kiểm tra: `http://127.0.0.1:3100/api/public/devices` có `"connected": true`.
 
 ## Phụ lục 2: Nạp Firmware ESP32-S3 và cấu hình mạng
 1. Sao chép `include\config.example.h` thành `include\config.h`; điền Wi-Fi, `WS_HOST` (IP laptop), `WS_PORT=3100`, `WS_TOKEN` (trùng `DEVICE_TOKEN`), `WS_PUBLIC_HOST` (tên miền công khai).

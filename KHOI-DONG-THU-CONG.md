@@ -9,7 +9,11 @@ Cài đặt máy mới: xem [README.md](README.md), mục 1. Hệ thống gồm 
 | Voice bridge (Python, backend tự bật) | PhoWhisper nhận dạng giọng nói, Edge TTS / giọng Windows "An" đọc câu trả lời | 8010 (chỉ máy này) |
 | ESP32-S3 | Micro, loa, OLED, LED, DHT22 | kết nối tới `ws://<IP laptop>:3100/aiot` |
 
-## Cách 1 – Một lệnh (khuyên dùng)
+## Cách 0 – Bấm đúp file (khuyên dùng)
+
+Bấm đúp `Khoi-dong-AIoT.bat` trong `E:\AIoT\Code`. Cửa sổ tự bật Ollama, backend (3100) và đường hầm Internet, tự chạy lại khi lỗi, và in địa chỉ dashboard khi sẵn sàng. Giữ cửa sổ mở trong lúc dùng. Tắt: đóng cửa sổ, `Ctrl+C`, hoặc bấm đúp `Tat-AIoT.bat`. Hệ thống không tự chạy khi bật máy.
+
+## Cách 1 – Một lệnh (chỉ backend, không có đường hầm)
 
 Mở PowerShell tại `E:\AIoT\Code`:
 
