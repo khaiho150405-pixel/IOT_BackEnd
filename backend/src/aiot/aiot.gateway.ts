@@ -81,7 +81,7 @@ export class AiotGateway implements OnModuleDestroy {
     routeUpgrade(server, '/aiot', this.server);
     this.heartbeat = setInterval(() => {
       for (const s of this.sessions) {
-        if (!s.alive) { s.ws.terminate(); continue; }
+        if (!s.alive) { console.warn(`Heartbeat timeout for ${s.id || 'unknown device'}: no pong/message in 15 s`); s.ws.terminate(); continue; }
         s.alive = false;
         s.ws.ping();
       }
@@ -100,6 +100,9 @@ export class AiotGateway implements OnModuleDestroy {
       console.log(`WebSocket connected from ${peer}`);
       ws.on('pong', () => { session.alive = true; });
       ws.on('message', (data, binary) => {
+        // Any message proves the link is alive (sensor reports every 2 s): a pong delayed
+        // by the public tunnel must not get a healthy device disconnected.
+        session.alive = true;
         try { this.receive(session, data, binary); }
         catch (error) {
           console.warn(`WebSocket protocol rejected for ${session.id || peer}: ${(error as Error).message}`);
@@ -108,7 +111,7 @@ export class AiotGateway implements OnModuleDestroy {
       });
       ws.on('close', (code, reason) => {
         this.stopFollowWindow(session);
-        console.log(`WebSocket closed for ${session.id || peer}: ${code} ${reason.toString()}`);
+        console.log(`WebSocket closed for ${session.id || peer}: ${code} ${reason.toString()} after ${Math.round((Date.now() - session.connectedAt) / 1000)} s`);
         clearTimeout(session.readyTimer);
         session.controller?.abort();
         session.pending?.reject(new Error('Device disconnected'));

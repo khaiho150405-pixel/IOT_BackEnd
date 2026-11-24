@@ -54,6 +54,7 @@ WebSocketsClient socketClient;
 std::atomic<bool> connected{false}, speaking{false}, ledEnabled{true};
 std::atomic<uint32_t> ledColor{0x00FF00};
 std::atomic<bool> serverBusy{false};
+uint32_t wsConnectedAt = 0;
 std::atomic<unsigned> uiState{0}; // offline, listening, thinking, speech, music, error
 // Status bar inputs: whether the assistant name is needed, the no-name window (countdown),
 // and the microphone gate (the user is being recorded right now) with its level.
@@ -700,6 +701,7 @@ void onSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED: {
       connected = true;
+      wsConnectedAt = millis();
       serverBusy = true;
       lastServerMessage = millis();
       uiState = 2;
@@ -718,7 +720,15 @@ void onSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
       serverBusy = false;
       uiState = 0;
       clearPlayback();
-      Serial.println("WebSocket disconnected");
+      // Diagnostics: how long the link lasted and whether memory (TLS needs ~40 KB in one
+      // block) is getting short.
+      Serial.printf("WebSocket disconnected (up %lu s, heap %u, largest block %u)\n",
+                    static_cast<unsigned long>((millis() - wsConnectedAt) / 1000),
+                    ESP.getFreeHeap(), ESP.getMaxAllocHeap());
+      break;
+    case WStype_ERROR:
+      Serial.printf("WebSocket error: %.*s (heap %u, largest block %u)\n", static_cast<int>(length),
+                    payload ? reinterpret_cast<const char *>(payload) : "", ESP.getFreeHeap(), ESP.getMaxAllocHeap());
       break;
     case WStype_TEXT: receiveJson(payload, length); break;
     case WStype_BIN: receiveAudio(payload, length); break;
@@ -879,6 +889,109 @@ void flushPreroll() {
 
 void resetVoiceGate() { gateOpen = false; prerollCount = 0; micCapturing = false; }
 
+// Root certificates for the public backend (wss://WS_PUBLIC_HOST): ISRG Root X1 (Let's Encrypt,
+// the current issuer), GTS Root R1 and GlobalSign Root CA (Google Trust Services, the other CA
+// Cloudflare uses). The server certificate is verified, never accepted blindly.
+const char PUBLIC_ROOT_CA[] = R"PEM(
+-----BEGIN CERTIFICATE-----
+MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAwTzELMAkGA1UE
+BhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2VhcmNoIEdyb3VwMRUwEwYDVQQD
+EwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQG
+EwJVUzEpMCcGA1UEChMgSW50ZXJuZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMT
+DElTUkcgUm9vdCBYMTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54r
+Vygch77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+0TM8ukj1
+3Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6UA5/TR5d8mUgjU+g4rk8K
+b4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sWT8KOEUt+zwvo/7V3LvSye0rgTBIlDHCN
+Aymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyHB5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ
+4Q7e2RCOFvu396j3x+UCB5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf
+1b0SHzUvKBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWnOlFu
+hjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTnjh8BCNAw1FtxNrQH
+usEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbwqHyGO0aoSCqI3Haadr8faqU9GY/r
+OPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CIrU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4G
+A1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY
+9umbbjANBgkqhkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL
+ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ3BebYhtF8GaV
+0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KKNFtY2PwByVS5uCbMiogziUwt
+hDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5ORAzI4JMPJ+GslWYHb4phowim57iaztXOoJw
+TdwJx4nLCgdNbOhdjsnvzqvHu7UrTkXWStAmzOVyyghqpZXjFaH3pO3JLF+l+/+sKAIuvtd7u+Nx
+e5AW0wdeRlN8NwdCjNPElpzVmbUq4JUagEiuTDkHzsxHpFKVK7q4+63SM1N95R1NbdWhscdCb+ZA
+JzVcoyi3B43njTOQ5yOf+1CceWxG1bQVs5ZufpsMljq4Ui0/1lvh+wjChP4kqKOJ2qxq4RgqsahD
+YVvTH9w7jXbyLeiNdd8XM2w9U/t7y0Ff/9yi0GE44Za4rF2LN9d11TPAmRGunUHBcnWEvgJBQl9n
+JEiU0Zsnvgc/ubhPgXRR4Xq37Z0j4r7g1SgEEzwxA57demyPxgcYxn/eR44/KJ4EBs+lVDR3veyJ
+m+kXQ99b21/+jh5Xos1AnX5iItreGCc=
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIFVzCCAz+gAwIBAgINAgPlk28xsBNJiGuiFzANBgkqhkiG9w0BAQwFADBHMQswCQYDVQQGEwJV
+UzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3Qg
+UjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UE
+ChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwggIiMA0G
+CSqGSIb3DQEBAQUAA4ICDwAwggIKAoICAQC2EQKLHuOhd5s73L+UPreVp0A8of2C+X0yBoJx9vaM
+f/vo27xqLpeXo4xL+Sv2sfnOhB2x+cWX3u+58qPpvBKJXqeqUqv4IyfLpLGcY9vXmX7wCl7raKb0
+xlpHDU0QM+NOsROjyBhsS+z8CZDfnWQpJSMHobTSPS5g4M/SCYe7zUjwTcLCeoiKu7rPWRnWr4+w
+B7CeMfGCwcDfLqZtbBkOtdh+JhpFAz2weaSUKK0PfyblqAj+lug8aJRT7oM6iCsVlgmy4HqMLnXW
+nOunVmSPlk9orj2XwoSPwLxAwAtcvfaHszVsrBhQf4TgTM2S0yDpM7xSma8ytSmzJSq0SPly4cpk
+9+aCEI3oncKKiPo4Zor8Y/kB+Xj9e1x3+naH+uzfsQ55lVe0vSbv1gHR6xYKu44LtcXFilWr06zq
+kUspzBmkMiVOKvFlRNACzqrOSbTqn3yDsEB750Orp2yjj32JgfpMpf/VjsPOS+C12LOORc92wO1A
+K/1TD7Cn1TsNsYqiA94xrcx36m97PtbfkSIS5r762DL8EGMUUXLeXdYWk70paDPvOmbsB4om3xPX
+V2V4J95eSRQAogB/mqghtqmxlbCluQ0WEdrHbEg8QOB+DVrNVjzRlwW5y0vtOUucxD/SVRNuJLDW
+cfr0wbrM7Rv1/oFB2ACYPTrIrnqYNxgFlQIDAQABo0IwQDAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0T
+AQH/BAUwAwEB/zAdBgNVHQ4EFgQU5K8rJnEaK0gnhS9SZizv8IkTcT4wDQYJKoZIhvcNAQEMBQAD
+ggIBAJ+qQibbC5u+/x6Wki4+omVKapi6Ist9wTrYggoGxval3sBOh2Z5ofmmWJyq+bXmYOfg6LEe
+QkEzCzc9zolwFcq1JKjPa7XSQCGYzyI0zzvFIoTgxQ6KfF2I5DUkzps+GlQebtuyh6f88/qBVRRi
+ClmpIgUxPoLW7ttXNLwzldMXG+gnoot7TiYaelpkttGsN/H9oPM47HLwEXWdyzRSjeZ2axfG34ar
+J45JK3VmgRAhpuo+9K4l/3wV3s6MJT/KYnAK9y8JZgfIPxz88NtFMN9iiMG1D53Dn0reWVlHxYci
+NuaCp+0KueIHoI17eko8cdLiA6EfMgfdG+RCzgwARWGAtQsgWSl4vflVy2PFPEz0tv/bal8xa5me
+LMFrUKTX5hgUvYU/Z6tGn6D/Qqc6f1zLXbBwHSs09dR2CQzreExZBfMzQsNhFRAbd03OIozUhfJF
+fbdT6u9AWpQKXCBfTkBdYiJ23//OYb2MI3jSNwLgjt7RETeJ9r/tSQdirpLsQBqvFAnZ0E6yove+
+7u7Y/9waLd64NnHi/Hm3lCXRSHNboTXns5lndcEZOitHTtNCjv0xyBZm2tIMPNuzjsmhDYAPexZ3
+FL//2wmUspO8IFgV6dtxQ/PeEMMA3KgqlbbC1j+Qa3bbbP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3
+gm3c
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIIDdTCCAl2gAwIBAgILBAAAAAABFUtaw5QwDQYJKoZIhvcNAQEFBQAwVzELMAkGA1UEBhMCQkUx
+GTAXBgNVBAoTEEdsb2JhbFNpZ24gbnYtc2ExEDAOBgNVBAsTB1Jvb3QgQ0ExGzAZBgNVBAMTEkds
+b2JhbFNpZ24gUm9vdCBDQTAeFw05ODA5MDExMjAwMDBaFw0yODAxMjgxMjAwMDBaMFcxCzAJBgNV
+BAYTAkJFMRkwFwYDVQQKExBHbG9iYWxTaWduIG52LXNhMRAwDgYDVQQLEwdSb290IENBMRswGQYD
+VQQDExJHbG9iYWxTaWduIFJvb3QgQ0EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDa
+DuaZjc6j40+Kfvvxi4Mla+pIH/EqsLmVEQS98GPR4mdmzxzdzxtIK+6NiY6arymAZavpxy0Sy6sc
+THAHoT0KMM0VjU/43dSMUBUc71DuxC73/OlS8pF94G3VNTCOXkNz8kHp1Wrjsok6Vjk4bwY8iGlb
+Kk3Fp1S4bInMm/k8yuX9ifUSPJJ4ltbcdG6TRGHRjcdGsnUOhugZitVtbNV4FpWi6cgKOOvyJBNP
+c1STE4U6G7weNLWLBYy5d4ux2x8gkasJU26Qzns3dLlwR5EiUWMWea6xrkEmCMgZK9FGqkjWZCrX
+gzT/LCrBbBlDSgeF59N89iFo7+ryUp9/k5DPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV
+HRMBAf8EBTADAQH/MB0GA1UdDgQWBBRge2YaRQ2XyolQL30EzTSo//z9SzANBgkqhkiG9w0BAQUF
+AAOCAQEA1nPnfE920I2/7LqivjTFKDK1fPxsnCwrvQmeU79rXqoRSLblCKOzyj1hTdNGCbM+w6Dj
+Y1Ub8rrvrTnhQ7k4o+YviiY776BQVvnGCv04zcQLcFGUl5gE38NflNUVyRRBnMRddWQVDf9VMOyG
+j/8N7yy5Y0b2qvzfvGn9LhJIZJrglfCm7ymPAbEVtQwdpf5pLGkkeB6zpxxxYu7KyJesF12KwvhH
+hm4qxFYxldBniYUr+WymXUadDKqC5JlR3XC321Y9YeRq4VzW9v493kHMB65jUr9TU/Qr6cf9tveC
+X4XSQRjbgbMEHMUfpIBvFSDJ3gyICh3WZlXi/EjJKSZp4A==
+-----END CERTIFICATE-----
+)PEM";
+
+// Backend link. LAN: ws://<laptop>:<port>/aiot on the laptop hotspot (lowest latency).
+// PUBLIC: wss://WS_PUBLIC_HOST/aiot through the tunnel, so any Wi-Fi with Internet works
+// (no laptop IP, firewall or client-isolation problems). The other one is tried when the
+// current one has not connected for LINK_FAILOVER_MS.
+enum class BackendLink { Lan, Public };
+BackendLink backendLink = BackendLink::Lan;
+uint32_t linkStartedAt = 0;
+constexpr uint32_t LINK_FAILOVER_MS = 40000;
+bool onLaptopHotspot = false; // Wi-Fi address in 192.168.137.x (Windows Mobile Hotspot)
+
+bool hasPublicBackend() { return WS_PUBLIC_HOST[0] != '\0'; }
+
+void startBackendLink(BackendLink link) {
+  socketClient.disconnect();
+  backendLink = link;
+  linkStartedAt = millis();
+  if (link == BackendLink::Public) {
+    Serial.printf("Backend link: wss://%s:%u%s\n", WS_PUBLIC_HOST, WS_PUBLIC_PORT, WS_PATH);
+    socketClient.beginSslWithCA(WS_PUBLIC_HOST, WS_PUBLIC_PORT, WS_PATH, PUBLIC_ROOT_CA);
+  } else {
+    Serial.printf("Backend link: ws://%s:%u%s\n", curHost, curPort, WS_PATH);
+    socketClient.begin(curHost, curPort, WS_PATH);
+  }
+}
+
 void networkTask(void *) {
   loadConfig();
   WiFi.mode(WIFI_STA);
@@ -891,16 +1004,18 @@ void networkTask(void *) {
   // writes blocked for seconds). 11 dBm is plenty for a room and gives a clean uplink.
   WiFi.setTxPower(WIFI_POWER_11dBm);
 
-  socketClient.begin(curHost, curPort, WS_PATH);
+  // The link (LAN or public) is chosen once Wi-Fi is up; see startBackendLink().
   const String authHeader = String("Authorization: Bearer ") + curToken;
   socketClient.setExtraHeaders(authHeader.c_str()); // Library appends CRLF itself.
   socketClient.onEvent(onSocketEvent);
   socketClient.setReconnectInterval(3000);
-  socketClient.enableHeartbeat(15000, 3000, 2);
+  // Ping every 15 s; drop the link only after 3 pongs missed by 10 s each. Through the public
+  // tunnel a pong sometimes takes a few seconds, and 2 misses of 3 s dropped a healthy link.
+  socketClient.enableHeartbeat(15000, 10000, 3);
 
   uint32_t lastWifiAttempt = millis(), lastSensor = 0;
-  // Open the setup hotspot after this long without a backend connection.
-  constexpr uint32_t PORTAL_AFTER_MS = 20000;
+  // Open the setup hotspot after this long without a backend connection (time for both links).
+  constexpr uint32_t PORTAL_AFTER_MS = 60000;
   uint32_t lastBackendSeen = millis();
   bool hadWifi = false;
   bool buttonWasDown = false;
@@ -936,14 +1051,30 @@ void networkTask(void *) {
       if (!hadWifi) {
         Serial.printf("WiFi IP: %s | Gateway: %s | Host: %s\n",
           WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), curHost);
-        if (WiFi.localIP()[0] == 192 && WiFi.localIP()[1] == 168 && WiFi.localIP()[2] == 137) {
-          if (strcmp(curHost, "192.168.137.1") != 0) {
-            Serial.println("Hotspot 192.168.137.x detected -> Setting Host to 192.168.137.1");
-            strlcpy(curHost, "192.168.137.1", sizeof(curHost));
-            socketClient.disconnect();
-            socketClient.begin(curHost, curPort, WS_PATH);
-          }
+        onLaptopHotspot = WiFi.localIP()[0] == 192 && WiFi.localIP()[1] == 168 && WiFi.localIP()[2] == 137;
+        if (onLaptopHotspot && strcmp(curHost, "192.168.137.1") != 0) {
+          Serial.println("Hotspot 192.168.137.x detected -> Setting Host to 192.168.137.1");
+          strlcpy(curHost, "192.168.137.1", sizeof(curHost));
         }
+        // Laptop hotspot: talk to the laptop directly. Any other Wi-Fi: use the public address.
+#ifdef AIOT_FORCE_PUBLIC_LINK
+        // Test builds only (PLATFORMIO_BUILD_FLAGS=-DAIOT_FORCE_PUBLIC_LINK): always use wss.
+        startBackendLink(hasPublicBackend() ? BackendLink::Public : BackendLink::Lan);
+#else
+        startBackendLink(onLaptopHotspot || !hasPublicBackend() ? BackendLink::Lan : BackendLink::Public);
+#endif
+      } else if (connected) {
+        linkStartedAt = millis(); // failover counts from the last moment the link was up
+#ifdef AIOT_FORCE_PUBLIC_LINK
+      } else if (hasPublicBackend() && millis() - linkStartedAt > LINK_FAILOVER_MS) {
+#else
+      // On the laptop hotspot both links end at the same laptop, and the public one goes through
+      // the hotspot NAT (seen dropping every few minutes): stay on LAN there. Failover is for
+      // other Wi-Fi networks.
+      } else if (hasPublicBackend() && !onLaptopHotspot && millis() - linkStartedAt > LINK_FAILOVER_MS) {
+#endif
+        Serial.println("Backend not reachable on this link -> trying the other one");
+        startBackendLink(backendLink == BackendLink::Lan ? BackendLink::Public : BackendLink::Lan);
       }
       lap("wifi");
       socketClient.loop();

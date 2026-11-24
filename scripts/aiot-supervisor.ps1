@@ -28,8 +28,10 @@ function Write-Log([string]$text) {
     Write-Host $line
 }
 function Test-Port([int]$p) {
+    # Bounded to 500 ms: on Windows a refused connection can otherwise take about 2 s.
     $client = New-Object Net.Sockets.TcpClient
-    try { $client.Connect('127.0.0.1', $p); return $true } catch { return $false } finally { $client.Dispose() }
+    try { $task = $client.ConnectAsync('127.0.0.1', $p); return ($task.Wait(500) -and $client.Connected) }
+    catch { return $false } finally { $client.Dispose() }
 }
 function Find-Cloudflared {
     $command = Get-Command cloudflared -ErrorAction SilentlyContinue
@@ -39,8 +41,10 @@ function Find-Cloudflared {
     return $null
 }
 function Start-Backend {
-    $out = Join-Path $logs ('backend-{0:yyyyMMdd}.log' -f (Get-Date))
-    $err = Join-Path $logs ('backend-{0:yyyyMMdd}.err.log' -f (Get-Date))
+    # One file per start: Start-Process overwrites, so a restart must not erase the previous run's log.
+    $stamp = '{0:yyyyMMdd-HHmmss}' -f (Get-Date)
+    $out = Join-Path $logs "backend-$stamp.log"
+    $err = Join-Path $logs "backend-$stamp.err.log"
     $node = (Get-Command node).Source
     Write-Log "Starting backend: $node dist/src/main.js (port $Port)"
     $process = Start-Process -FilePath $node -ArgumentList 'dist/src/main.js' -WorkingDirectory $backend `
@@ -80,14 +84,28 @@ function Update-PublicUrl {
 }
 
 Write-Log 'AIoT supervisor started.'
-# 1. Ollama (started by its own startup entry); wait up to 90 s so Qwen can be warmed up.
-for ($i = 0; $i -lt 45 -and !(Test-Port 11434); $i++) { Start-Sleep -Seconds 2 }
-Write-Log ("Ollama " + $(if (Test-Port 11434) { 'ready' } else { 'not answering; backend starts anyway (rule-based fallback)' }))
+# 1. Ollama: normally started by its own startup entry, but that does not always happen, so
+# after 10 s the Ollama app is started here. Wait at most 90 s in total so Qwen can be warmed up.
+$ollamaWait = [Diagnostics.Stopwatch]::StartNew()
+$ollamaLaunched = $false
+while (!(Test-Port 11434) -and $ollamaWait.Elapsed.TotalSeconds -lt 90) {
+    if (!$ollamaLaunched -and $ollamaWait.Elapsed.TotalSeconds -ge 10) {
+        $ollamaLaunched = $true
+        $ollamaApp = Join-Path $env:LOCALAPPDATA 'Programs\Ollama\ollama app.exe'
+        if (Test-Path -LiteralPath $ollamaApp) { Write-Log 'Ollama not running: starting the Ollama app'; Start-Process -FilePath $ollamaApp -WindowStyle Hidden }
+        else { Write-Log "Ollama app not found at $ollamaApp" }
+    }
+    Start-Sleep -Seconds 2
+}
+Write-Log ("Ollama " + $(if (Test-Port 11434) { "ready after $([int]$ollamaWait.Elapsed.TotalSeconds) s" } else { 'not answering; backend starts anyway (rule-based fallback)' }))
 
 $cloudflared = if ($NoTunnel) { $null } else { Find-Cloudflared }
 if (!$NoTunnel -and !$cloudflared) { Write-Log 'cloudflared not found: Internet tunnel disabled.' }
 $backendProc = $null; $tunnelProc = $null
 $backendFailures = 0
+# Leaves a trace in supervisor.log when the supervisor is stopped (log-off, shutdown, killed),
+# so a missing backend can be explained later.
+try {
 while ($true) {
     # 2. Backend. If something else already answers on the port (e.g. a backend started by
     # hand), leave it alone and only take over once it is gone.
@@ -111,4 +129,7 @@ while ($true) {
     }
     if ($tunnelProc) { Update-PublicUrl }
     Start-Sleep -Seconds 5
+}
+} finally {
+    Write-Log 'AIoT supervisor stopping.'
 }
