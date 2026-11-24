@@ -105,6 +105,13 @@ const char *loopSlowPart = "";
 float micPeakRms = 0;     // loudest 16 ms chunk (voice band) since the last report
 uint32_t micOpenCount = 0; // voice-gate openings since the last report
 uint32_t micDropCount = 0; // audio frames dropped because the socket was full
+// Same Wi-Fi as the laptop (not its hotspot): the backend tells the device the laptop's LAN
+// address after a public (wss) hello; the device then talks to it directly with ws:// (a few
+// ms instead of a round trip through Cloudflare and TLS). Kept until Wi-Fi reconnects.
+char lanHint[40] = "";
+uint16_t lanHintPort = 0;
+std::atomic<bool> lanHintPending{false};
+bool lanHintFailed = false; // the direct link did not connect: stay on wss on this Wi-Fi
 
 void clearPlayback();
 
@@ -745,6 +752,17 @@ void receiveJson(const uint8_t *data, size_t length) {
     return;
   }
   const char *type = doc["type"] | "";
+  if (!strcmp(type, "lan_hint")) {
+    const char *host = doc["host"] | "";
+    const unsigned port = doc["port"] | 0u;
+    IPAddress parsed;
+    if (!lanHintFailed && port > 0 && port < 65536 && strlen(host) < sizeof(lanHint) && parsed.fromString(host)) {
+      strlcpy(lanHint, host, sizeof(lanHint));
+      lanHintPort = port;
+      lanHintPending = true;
+    }
+    return;
+  }
   if (!strcmp(type, "display")) {
     if (!doc["index"].is<unsigned>() || !doc["total"].is<unsigned>() ||
         !doc["bitmap"].is<const char *>() || !doc["batch"].is<const char *>()) {
@@ -870,6 +888,7 @@ void onSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
           "\",\"audio\":{\"format\":\"pcm_s16le\",\"sample_rate\":16000,\"channels\":1},"
           "\"max_audio_chunk_bytes\":4096,\"mic_codec\":\"ima_adpcm\",\"led_enabled\":";
       hello += ledEnabled.load() ? "true" : "false";
+      hello += ",\"ip\":\"" + WiFi.localIP().toString() + "\",\"netmask\":\"" + WiFi.subnetMask().toString() + "\"";
       hello += "}";
       socketClient.sendTXT(hello);
       break;
@@ -1194,10 +1213,14 @@ void startBackendLink(BackendLink link) {
     Serial.printf("Backend link: wss://%s:%u%s\n", WS_PUBLIC_HOST, WS_PUBLIC_PORT, WS_PATH);
     socketClient.beginSslWithCA(WS_PUBLIC_HOST, WS_PUBLIC_PORT, WS_PATH, PUBLIC_ROOT_CA);
   } else {
-    Serial.printf("Backend link: ws://%s:%u%s\n", curHost, curPort, WS_PATH);
-    socketClient.begin(curHost, curPort, WS_PATH);
+    const bool direct = !onLaptopHotspot && lanHint[0] && !lanHintFailed;
+    const char *host = direct ? lanHint : curHost;
+    const uint16_t port = direct ? lanHintPort : curPort;
+    Serial.printf("Backend link: ws://%s:%u%s%s\n", host, port, WS_PATH, direct ? " (same Wi-Fi as the laptop)" : "");
+    socketClient.begin(host, port, WS_PATH);
   }
 }
+bool usingLanHint() { return backendLink == BackendLink::Lan && !onLaptopHotspot && lanHint[0] && !lanHintFailed; }
 
 void networkTask(void *) {
   loadConfig();
@@ -1266,6 +1289,7 @@ void networkTask(void *) {
         Serial.printf("WiFi IP: %s | Gateway: %s | Host: %s\n",
           WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), curHost);
         onLaptopHotspot = WiFi.localIP()[0] == 192 && WiFi.localIP()[1] == 168 && WiFi.localIP()[2] == 137;
+        lanHint[0] = '\0'; lanHintFailed = false; lanHintPending = false;
         if (onLaptopHotspot && strcmp(curHost, "192.168.137.1") != 0) {
           Serial.println("Hotspot 192.168.137.x detected -> Setting Host to 192.168.137.1");
           strlcpy(curHost, "192.168.137.1", sizeof(curHost));
@@ -1277,6 +1301,12 @@ void networkTask(void *) {
 #else
         startBackendLink(onLaptopHotspot || !hasPublicBackend() ? BackendLink::Lan : BackendLink::Public);
 #endif
+      } else if (lanHintPending.exchange(false)) {
+        if (backendLink == BackendLink::Public && !lanHintFailed) {
+          Serial.printf("Laptop is on this Wi-Fi at %s -> direct link\n", lanHint);
+          connected = false;
+          startBackendLink(BackendLink::Lan);
+        }
       } else if (connected) {
         linkStartedAt = millis(); // failover counts from the last moment the link was up
 #ifdef AIOT_FORCE_PUBLIC_LINK
@@ -1288,7 +1318,13 @@ void networkTask(void *) {
       } else if (hasPublicBackend() && !onLaptopHotspot && millis() - linkStartedAt > LINK_FAILOVER_MS) {
 #endif
         Serial.println("Backend not reachable on this link -> trying the other one");
-        startBackendLink(backendLink == BackendLink::Lan ? BackendLink::Public : BackendLink::Lan);
+        if (usingLanHint()) {
+          // Direct link blocked (firewall, client isolation): wss only, until Wi-Fi reconnects.
+          lanHintFailed = true;
+          startBackendLink(BackendLink::Public);
+        } else {
+          startBackendLink(backendLink == BackendLink::Lan ? BackendLink::Public : BackendLink::Lan);
+        }
       }
       lap("wifi");
       socketClient.loop();

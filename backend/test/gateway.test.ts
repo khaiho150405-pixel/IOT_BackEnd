@@ -480,3 +480,38 @@ test('a device announcing mic_codec ima_adpcm is understood like raw PCM', async
   assert.ok(peak > 3000 && peak < 5500, `decoded speech keeps its level (peak ${peak})`);
   ws.close();
 });
+
+test('a device on the laptop network gets the laptop LAN address (lan_hint) after a tunnel hello', async t => {
+  const { networkInterfaces } = await import('node:os');
+  const { laptopAddressFor } = await import('../src/network/mdns');
+  assert.equal(laptopAddressFor('8.8.8.8', '255.255.255.0'), undefined, 'public addresses are never hinted');
+  assert.equal(laptopAddressFor('10.0.0.5', '255.0.0.0'), undefined, 'networks larger than /16 are not trusted');
+  assert.equal(laptopAddressFor('not-an-ip', '255.255.255.0'), undefined);
+  const lan = Object.values(networkInterfaces()).flat().find(a => a && a.family === 'IPv4' && !a.internal &&
+    /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(a.address) && a.netmask === '255.255.255.0');
+  if (!lan) { t.skip('no private /24 interface on this machine'); return; }
+  const parts = lan.address.split('.');
+  const deviceIp = [...parts.slice(0, 3), String((Number(parts[3]) % 250) + 2)].join('.');
+  assert.equal(laptopAddressFor(deviceIp, '255.255.255.0'), lan.address);
+
+  process.env.DEVICE_TOKEN = 'lan-hint-token-with-at-least-24-characters';
+  const ai = { async analyze() { throw new Error('unused'); }, async speak() { return Buffer.alloc(0); } };
+  const http = createServer(), gateway = new AiotGateway(ai as unknown as AiotService, new HistoryStore());
+  gateway.attach(http); http.listen(0, '127.0.0.1'); await once(http, 'listening');
+  t.after(async () => { gateway.onModuleDestroy(); await new Promise<void>(resolve => http.close(() => resolve())); });
+  const hello = async (ip: string) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${(http.address() as AddressInfo).port}/aiot`,
+      { headers: { Authorization: `Bearer ${process.env.DEVICE_TOKEN}` } });
+    const messages: any[] = [];
+    ws.on('message', (data, binary) => { if (!binary) messages.push(JSON.parse(data.toString())); });
+    await once(ws, 'open');
+    ws.send(JSON.stringify({ type: 'hello', device_id: 'lan-device', ip, netmask: '255.255.255.0',
+      audio: { format: 'pcm_s16le', sample_rate: 16000, channels: 1 } }));
+    await until(() => messages.some(m => m.state === 'listening'));
+    await sleep(50);
+    ws.close();
+    return messages.find(m => m.type === 'lan_hint');
+  };
+  assert.deepEqual(await hello(deviceIp), { type: 'lan_hint', host: lan.address, port: Number(process.env.PORT || 3100) });
+  assert.equal(await hello('203.0.113.7'), undefined, 'another network: no hint');
+});

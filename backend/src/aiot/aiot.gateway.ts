@@ -12,10 +12,13 @@ import { AiotMqttService } from './mqtt.service';
 import { SensorMonitor } from './sensor-monitor';
 import { AuthService } from '../auth/auth.service';
 import { routeUpgrade } from '../network/upgrade';
+import { laptopAddressFor } from '../network/mdns';
 
 interface Session {
   ws: WebSocket;
   id?: string;
+  /** TCP peer: 127.0.0.1 when the device comes through the Cloudflare tunnel. */
+  peer: string;
   connectedAt: number;
   sensor?: Sensor;
   micSlot?: number;
@@ -101,7 +104,7 @@ ${alert.message}`);
     this.server.on('connection', (ws, req) => {
       const peer = req.socket.remoteAddress || 'unknown peer';
       const session: Session = {
-        ws, connectedAt: Date.now(), highPass: new HighPassFilter(Number(process.env.MIC_HIGHPASS_HZ || 120)),
+        ws, peer, connectedAt: Date.now(), highPass: new HighPassFilter(Number(process.env.MIC_HIGHPASS_HZ || 120)),
         detector: new UtteranceDetector(Number(process.env.VAD_RMS || 500),
           Number(process.env.VAD_SILENCE_MS || 1200), Number(process.env.VAD_MAX_MS || 12000)),
         busy: false, lastTurn: 0, rateStart: Date.now(), rateBytes: 0, textCount: 0, alive: true,
@@ -221,6 +224,7 @@ ${alert.message}`);
       this.show(s, 'Dạ em chào đại ca!\nEm sẵn sàng rồi ạ.');
       this.mqtt?.publishState(s.id!, { connected: true, ledEnabled: s.ledEnabled, busy: false });
       this.mqtt?.publishAlert(s.id!, this.monitor?.activeAlerts(s.id!) ?? []);
+      this.sendLanHint(s, message);
       return;
     }
     if (message.type === 'sensor') {
@@ -308,6 +312,21 @@ ${alert.message}`);
       session.busy = false; this.publishBusy(session);
       if (session.ws.readyState === WebSocket.OPEN) this.sendListening(session);
     }
+  }
+
+  /**
+   * A device that came through the tunnel (wss) but sits on the same Wi-Fi as this laptop is
+   * told the laptop's LAN address, so it can switch to a direct ws:// link (milliseconds instead
+   * of a Cloudflare round trip; TLS writes through the tunnel stalled the device loop for
+   * seconds). The device falls back to wss by itself if the direct link does not connect.
+   */
+  private sendLanHint(s: Session, hello: any) {
+    if (process.env.LAN_HINT === 'false' || !/^(127\.|::1$|::ffff:127\.)/.test(s.peer)) return;
+    if (typeof hello.ip !== 'string' || typeof hello.netmask !== 'string') return;
+    const host = laptopAddressFor(hello.ip, hello.netmask);
+    if (!host) return;
+    console.log(`Device ${s.id} is on the laptop's network (${hello.ip}): suggesting ws://${host}:${process.env.PORT || 3100}`);
+    this.send(s, { type: 'lan_hint', host, port: Number(process.env.PORT || 3100) });
   }
 
   private show(s: Session, text: string, answer?: string) {

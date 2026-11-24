@@ -20,6 +20,22 @@ function addressFor(remote: string): string[] {
   return (same.length ? same : all).map(a => a.address);
 }
 
+/**
+ * This machine's address on the same IPv4 subnet as a device that reported its address and
+ * netmask (e.g. the ESP32 on the home Wi-Fi), or undefined when they are on different networks.
+ */
+export function laptopAddressFor(deviceIp: string, netmask: string): string | undefined {
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+  if (!ipv4.test(deviceIp) || !ipv4.test(netmask) || deviceIp.split('.').some(n => Number(n) > 255)) return undefined;
+  const toInt = (ip: string) => ip.split('.').reduce((n, part) => (n << 8) + Number(part), 0) >>> 0;
+  const mask = toInt(netmask);
+  // Only small private networks (at least /16): never hint across the Internet.
+  if (mask < toInt('255.255.0.0') || !/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(deviceIp)) return undefined;
+  return Object.values(networkInterfaces()).flat()
+    .find(a => !!a && a.family === 'IPv4' && !a.internal && a.address !== deviceIp &&
+      ((toInt(a.address) & mask) >>> 0) === ((toInt(deviceIp) & mask) >>> 0))?.address;
+}
+
 export function startMdns(label = 'aiot', ttl = 120): MdnsHandle | undefined {
   const name = `${label.toLowerCase()}.local`;
   let responder: ReturnType<typeof makeMdns>;
