@@ -35,16 +35,19 @@ def ffmpeg_path() -> str:
 # synthesized in parallel, each retried on its own, are far more reliable than
 # retrying the whole sentence; when Edge still fails, a local Vietnamese voice
 # answers quickly instead of the user waiting 10+ seconds.
-EDGE_MAX_CHUNK_WORDS = int(os.environ.get("EDGE_TTS_MAX_CHUNK_WORDS", "8"))
+# Edge fails about half of its requests from this network (NoAudioReceived after ~3 s) whatever
+# the length, so every extra chunk was another chance to fail: whole sentences now (split only
+# at punctuation beyond 60 words), at most 2 requests in flight, and a 3.5 s budget.
+EDGE_MAX_CHUNK_WORDS = int(os.environ.get("EDGE_TTS_MAX_CHUNK_WORDS", "60"))
 EDGE_ATTEMPTS = int(os.environ.get("EDGE_TTS_ATTEMPTS", "5"))
-EDGE_CONCURRENCY = int(os.environ.get("EDGE_TTS_CONCURRENCY", "4"))
-EDGE_BUDGET_S = float(os.environ.get("EDGE_TTS_BUDGET_S", "3"))
+EDGE_CONCURRENCY = int(os.environ.get("EDGE_TTS_CONCURRENCY", "2"))
+EDGE_BUDGET_S = float(os.environ.get("EDGE_TTS_BUDGET_S", "3.5"))
 # After a failed Edge render, skip Edge for this long: hammering a throttled
 # endpoint keeps it throttled and every reply would wait the full budget.
-EDGE_COOLDOWN_S = float(os.environ.get("EDGE_TTS_COOLDOWN_S", "300"))
-# Consecutive failures double the pause (5, 10, 20... min) up to this cap, so a broken
+EDGE_COOLDOWN_S = float(os.environ.get("EDGE_TTS_COOLDOWN_S", "30"))
+# Consecutive failures double the pause (30 s, 1, 2... min) up to this cap, so a broken
 # Edge endpoint does not add its ~3 s failure budget to a reply every few minutes.
-EDGE_COOLDOWN_MAX_S = float(os.environ.get("EDGE_TTS_COOLDOWN_MAX_S", "3600"))
+EDGE_COOLDOWN_MAX_S = float(os.environ.get("EDGE_TTS_COOLDOWN_MAX_S", "600"))
 _edge_skip_until = 0.0
 _edge_failures = 0
 
@@ -85,21 +88,10 @@ async def edge_once(text: str, voice: str, receive_timeout: int) -> bytes:
 
 
 async def edge_chunk(text: str, voice: str, deadline: float) -> bytes:
-    """Some exact strings fail repeatedly, so after a few misses a multi-word chunk
-    is split in half (a different request text) and each half is tried again."""
-    words = text.split()
-    if len(words) < 2:
-        return await edge_hedged(text, voice, deadline, EDGE_ATTEMPTS)
-    try:
-        return await edge_hedged(text, voice, deadline, 3)
-    except ValueError:
-        raise
-    except Exception:
-        middle = len(words) // 2
-        print(f"[TTS] Splitting a failing {len(words)}-word chunk", flush=True)
-        halves = await asyncio.gather(edge_chunk(" ".join(words[:middle]), voice, deadline),
-                                      edge_chunk(" ".join(words[middle:]), voice, deadline))
-        return b"".join(halves)
+    """One chunk with hedged retries. Splitting a failing chunk into halves (tried before)
+    only multiplied the requests while Edge was refusing all of them (NoAudioReceived),
+    and a reply waited the whole budget before the offline voice took over."""
+    return await edge_hedged(text, voice, deadline, EDGE_ATTEMPTS)
 
 
 async def edge_hedged(text: str, voice: str, deadline: float, attempts: int) -> bytes:
@@ -267,6 +259,9 @@ def choose_voice(text: str, default_voice: str, lang: str | None = None) -> str:
 
 # Whisper tends to "hear" these stock phrases (from subtitles in its training
 # data) when an utterance is only noise. They are never useful commands here.
+# DLL search-path handles for the GPU libraries; kept alive for the whole process.
+_DLL_DIRECTORIES: list = []
+
 WHISPER_HALLUCINATIONS = {
     "thank you", "thank you very much", "thanks for watching", "thank you for watching", "you", "bye",
     "subscribe", "cam on cac ban da theo doi", "cam on cac ban da xem video",
@@ -370,14 +365,25 @@ def decode_utterance(decoder, samples, language: str, beam_size: int, without_ti
                      details: dict) -> tuple[str, float | None]:
     import numpy as np
 
+    if os.environ.get("ASR_VAD_FILTER", "1") != "0":
+        # The VAD only locates the speech; Whisper then gets it with 1 s of lead-in and 0.3 s
+        # after. Letting faster-whisper cut at the VAD boundaries (200 ms pad) dropped a softly
+        # spoken "trợ lý" at the start, and without any VAD Whisper invents sentences from noise.
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+
+        speech = get_speech_timestamps(samples, VadOptions(min_silence_duration_ms=300))
+        if not speech:
+            details["dropped"].append("no_speech:vad")
+            return "", None
+        start = max(0, speech[0]["start"] - 16000)
+        samples = samples[start:min(len(samples), speech[-1]["end"] + 4800)]
     segments, _ = decoder.transcribe(
         samples,
         language=language,
         beam_size=beam_size,
         temperature=0.0,
         condition_on_previous_text=False,
-        vad_filter=os.environ.get("ASR_VAD_FILTER", "1") != "0",
-        vad_parameters=dict(min_silence_duration_ms=300, speech_pad_ms=200),
+        vad_filter=False,
         no_speech_threshold=0.6,
         log_prob_threshold=-1.0,
         compression_ratio_threshold=2.4,
@@ -567,10 +573,39 @@ def main():
                 missing.append("vocabulary.json")
             if missing:
                 raise SystemExit(f"Whisper model directory is incomplete ({', '.join(missing)}): {model_name}")
-        print(f"Loading local Whisper model {model_name} (CPU int8, {args.threads} threads)...", flush=True)
-        BridgeHandler.whisper_model = WhisperModel(
-            model_name, device="cpu", compute_type="int8", cpu_threads=max(1, args.threads), num_workers=1
-        )
+        # LOCAL_ASR_DEVICE=cuda runs the Vietnamese model on the GPU (int8 weights, float16 maths):
+        # PhoWhisper-small there takes ~0.9 s per sentence, the same as base on the CPU, and hears
+        # the assistant's name far more reliably. Falls back to the CPU if CUDA cannot be loaded.
+        device = os.environ.get("LOCAL_ASR_DEVICE", "cpu").strip().lower()
+        BridgeHandler.whisper_model = None
+        if device in ("cuda", "auto"):
+            try:
+                import importlib.util
+
+                import numpy as np
+
+                torch_spec = importlib.util.find_spec("torch")
+                if torch_spec and torch_spec.origin and hasattr(os, "add_dll_directory"):
+                    torch_lib = Path(torch_spec.origin).parent / "lib"
+                    if torch_lib.is_dir():
+                        # cuBLAS/cuDNN shipped with PyTorch. The handle must stay referenced:
+                        # once garbage-collected the folder is removed from the DLL search path
+                        # and the first real request failed with "cublas64_12.dll is not found".
+                        _DLL_DIRECTORIES.append(os.add_dll_directory(str(torch_lib)))
+                        os.environ["PATH"] = str(torch_lib) + os.pathsep + os.environ.get("PATH", "")
+                print(f"Loading local Whisper model {model_name} (GPU int8_float16)...", flush=True)
+                gpu_model = WhisperModel(model_name, device="cuda", compute_type="int8_float16")
+                # CUDA libraries load lazily: decode one second of silence now so a missing
+                # library falls back to the CPU here instead of failing the first sentence.
+                list(gpu_model.transcribe(np.zeros(16000, dtype=np.float32), language="vi", beam_size=1)[0])
+                BridgeHandler.whisper_model = gpu_model
+            except Exception as error:
+                print(f"GPU speech recognition unavailable ({error}); using the CPU.", file=sys.stderr, flush=True)
+        if BridgeHandler.whisper_model is None:
+            print(f"Loading local Whisper model {model_name} (CPU int8, {args.threads} threads)...", flush=True)
+            BridgeHandler.whisper_model = WhisperModel(
+                model_name, device="cpu", compute_type="int8", cpu_threads=max(1, args.threads), num_workers=1
+            )
         BridgeHandler.vietnamese_only = is_vietnamese_only_model(model_name)
         english_name = os.environ.get("ASR_ENGLISH_MODEL", "base").strip()
         if BridgeHandler.vietnamese_only and english_name:

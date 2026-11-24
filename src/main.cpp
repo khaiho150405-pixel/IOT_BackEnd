@@ -89,9 +89,19 @@ portMUX_TYPE sensorMux = portMUX_INITIALIZER_UNLOCKED;
 float temperature = NAN, humidity = NAN;
 bool sensorValid = false;
 int16_t *audio = nullptr;
-size_t audioRead = 0, audioCount = 0;
-uint32_t lastPlayback = 0;
-bool playbackSeen = false;
+// Speaker ring buffer: the network task appends (receiveAudio) and clears it (clearPlayback);
+// the speaker task (speakerTask) consumes it. Indices change only under audioMux; audioGen
+// tells the speaker task that the buffer was cleared while it was writing to the I2S DMA.
+portMUX_TYPE audioMux = portMUX_INITIALIZER_UNLOCKED;
+volatile size_t audioRead = 0, audioCount = 0;
+volatile uint32_t audioGen = 0;
+std::atomic<bool> speakerFlush{false};
+volatile uint32_t lastPlayback = 0;
+volatile bool playbackSeen = false;
+// Playback starts once PLAYBACK_PREBUFFER samples are queued (or the stream has ended), and
+// again after running dry mid-stream, so Wi-Fi jitter is absorbed instead of heard as gaps.
+volatile bool playbackPrimed = false;
+constexpr size_t PLAYBACK_PREBUFFER = 4800; // 300 ms
 char playbackId[48] = {};
 bool playbackAckPending = false;
 uint32_t lastAudioPacket = 0;
@@ -112,7 +122,11 @@ uint32_t sensorSkips = 0;  // sensor reports skipped because the socket was full
 char lanHint[40] = "";
 uint16_t lanHintPort = 0;
 std::atomic<bool> lanHintPending{false};
-bool lanHintFailed = false; // the direct link did not connect: stay on wss on this Wi-Fi
+bool lanHintFailed = false; // the direct link did not connect: on wss until the next retry
+uint32_t lanHintFailedAt = 0;
+// A failed direct link (e.g. backend restarting for a minute) is retried after 2 min, then
+// 4, 8... up to 30 min if it keeps failing (firewall or client isolation on this Wi-Fi).
+uint32_t lanRetryMs = 120000;
 
 void clearPlayback();
 
@@ -691,8 +705,10 @@ void setupAudio() {
   spk.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
   spk.channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT;
   spk.tx_desc_auto_clear = true;
-  spk.dma_buf_count = 4;
-  spk.dma_buf_len = 128;
+  // 8 x 256 frames = 128 ms. With 4 x 128 (32 ms) any network-loop pass longer than that
+  // (incoming frames, OLED pages, TLS) ran the DMA dry: a click or gap in the speech.
+  spk.dma_buf_count = 8;
+  spk.dma_buf_len = 256;
   i2s_pin_config_t spkPins = {};
   spkPins.mck_io_num = I2S_PIN_NO_CHANGE;
   spkPins.bck_io_num = SPK_BCLK;
@@ -706,13 +722,17 @@ void setupAudio() {
 
 // Called only by the network task: WebSocket callbacks never block on playback.
 void clearPlayback() {
+  portENTER_CRITICAL(&audioMux);
   audioCount = audioRead = 0;
+  ++audioGen;
+  playbackPrimed = false;
+  portEXIT_CRITICAL(&audioMux);
+  speakerFlush = true; // the speaker task silences the DMA (never two tasks in the I2S driver)
   playbackSeen = false;
   speaking = false;
   remotePlayback = false;
   playbackAckPending = false;
   playbackId[0] = '\0';
-  i2s_zero_dma_buffer(I2S_NUM_1);
 }
 
 void sendError(const char *message) {
@@ -730,15 +750,21 @@ void receiveAudio(const uint8_t *data, size_t length) {
     sendError("audio_requires_even_PCM16_bytes_max_4096");
     return;
   }
-  if (length / 2 > AUDIO_CAPACITY - audioCount) {
-    // Reject the entire chunk; backend should pace audio at real-time speed.
+  portENTER_CRITICAL(&audioMux);
+  const size_t used = audioCount, tail = audioRead + audioCount;
+  portEXIT_CRITICAL(&audioMux);
+  if (length / 2 > AUDIO_CAPACITY - used) {
+    // Reject the entire chunk; backend keeps at most ~1 s ahead of playback.
     sendError("audio_buffer_full");
     return;
   }
   for (size_t i = 0; i < length; i += 2) {
     const uint16_t sample = data[i] | (uint16_t(data[i + 1]) << 8);
-    audio[(audioRead + audioCount++) % AUDIO_CAPACITY] = static_cast<int16_t>(sample);
+    audio[(tail + i / 2) % AUDIO_CAPACITY] = static_cast<int16_t>(sample);
   }
+  portENTER_CRITICAL(&audioMux);
+  audioCount += length / 2;
+  portEXIT_CRITICAL(&audioMux);
   speaking = true;
 }
 
@@ -922,25 +948,38 @@ void onSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
   }
 }
 
-void pumpSpeaker() {
-  if (audioCount) {
-    int16_t stereo[256];
-    const size_t count = min(audioCount, size_t(128));
-    for (size_t i = 0; i < count; ++i) {
-      stereo[2 * i] = stereo[2 * i + 1] = audio[(audioRead + i) % AUDIO_CAPACITY];
-    }
+/**
+ * Speaker task (core 1): moves queued speech to the I2S DMA with blocking writes, so playback
+ * no longer depends on the network loop. That loop sometimes stalls for seconds (a WebSocket
+ * frame arriving in pieces, TLS); with the speaker fed from it the 128 ms DMA ran dry and the
+ * speech broke up although 0.7 s more were already queued in the ring buffer.
+ */
+void speakerTask(void *) {
+  static int16_t stereo[512];
+  for (;;) {
+    if (speakerFlush.exchange(false)) i2s_zero_dma_buffer(I2S_NUM_1);
+    portENTER_CRITICAL(&audioMux);
+    if (!playbackPrimed && audioCount && (audioCount >= PLAYBACK_PREBUFFER || !remotePlayback)) playbackPrimed = true;
+    if (playbackPrimed && !audioCount && remotePlayback) playbackPrimed = false; // ran dry: rebuffer
+    const size_t count = playbackPrimed ? min(size_t(audioCount), size_t(256)) : 0;
+    const size_t read = audioRead;
+    const uint32_t gen = audioGen;
+    portEXIT_CRITICAL(&audioMux);
+    if (!count) { vTaskDelay(pdMS_TO_TICKS(4)); continue; }
+    for (size_t i = 0; i < count; ++i) stereo[2 * i] = stereo[2 * i + 1] = audio[(read + i) % AUDIO_CAPACITY];
     size_t written = 0;
-    i2s_write(I2S_NUM_1, stereo, count * 4, &written, 0);
+    i2s_write(I2S_NUM_1, stereo, count * 4, &written, pdMS_TO_TICKS(200)); // waits for DMA room
     const size_t consumed = written / 4;
-    audioRead = (audioRead + consumed) % AUDIO_CAPACITY;
-    audioCount -= consumed;
-    if (consumed) {
-      lastPlayback = millis();
-      playbackSeen = true;
-    }
+    portENTER_CRITICAL(&audioMux);
+    if (gen == audioGen) { audioRead = (audioRead + consumed) % AUDIO_CAPACITY; audioCount -= consumed; }
+    portEXIT_CRITICAL(&audioMux);
+    if (consumed) { lastPlayback = millis(); playbackSeen = true; }
   }
-  // Allow DMA to finish (32 ms) and short gaps between incoming frames.
-  speaking = remotePlayback || audioCount > 0 || (playbackSeen && millis() - lastPlayback < 200);
+}
+
+void pumpSpeaker() {
+  // Allow DMA to finish (128 ms) and short gaps between incoming frames.
+  speaking = remotePlayback || audioCount > 0 || (playbackSeen && millis() - lastPlayback < 250);
   if (remotePlayback && millis() - lastAudioPacket > 2000) {
     clearPlayback(); serverBusy = false; uiState = 1;
     sendError("playback_stalled");
@@ -1301,7 +1340,7 @@ void networkTask(void *) {
         Serial.printf("WiFi IP: %s | Gateway: %s | Host: %s\n",
           WiFi.localIP().toString().c_str(), WiFi.gatewayIP().toString().c_str(), curHost);
         onLaptopHotspot = WiFi.localIP()[0] == 192 && WiFi.localIP()[1] == 168 && WiFi.localIP()[2] == 137;
-        lanHint[0] = '\0'; lanHintFailed = false; lanHintPending = false;
+        lanHint[0] = '\0'; lanHintFailed = false; lanHintPending = false; lanRetryMs = 120000;
         if (onLaptopHotspot && strcmp(curHost, "192.168.137.1") != 0) {
           Serial.println("Hotspot 192.168.137.x detected -> Setting Host to 192.168.137.1");
           strlcpy(curHost, "192.168.137.1", sizeof(curHost));
@@ -1319,7 +1358,15 @@ void networkTask(void *) {
           connected = false;
           startBackendLink(BackendLink::Lan);
         }
+      } else if (connected && backendLink == BackendLink::Public && lanHint[0] && lanHintFailed &&
+                 !onLaptopHotspot && millis() - lanHintFailedAt > lanRetryMs && !serverBusy && !speaking) {
+        Serial.printf("Retrying the direct link to %s\n", lanHint);
+        lanHintFailed = false;
+        lanRetryMs = min<uint32_t>(lanRetryMs * 2, 1800000);
+        connected = false;
+        startBackendLink(BackendLink::Lan);
       } else if (connected) {
+        if (backendLink == BackendLink::Lan && lanHint[0] && millis() - wsConnectedAt > 300000) lanRetryMs = 120000; // direct link healthy again
         linkStartedAt = millis(); // failover counts from the last moment the link was up
 #ifdef AIOT_FORCE_PUBLIC_LINK
       } else if (hasPublicBackend() && millis() - linkStartedAt > LINK_FAILOVER_MS) {
@@ -1331,8 +1378,9 @@ void networkTask(void *) {
 #endif
         Serial.println("Backend not reachable on this link -> trying the other one");
         if (usingLanHint()) {
-          // Direct link blocked (firewall, client isolation): wss only, until Wi-Fi reconnects.
+          // Direct link not reachable (backend restarting, firewall, client isolation): wss for now.
           lanHintFailed = true;
+          lanHintFailedAt = millis();
           startBackendLink(BackendLink::Public);
         } else {
           startBackendLink(backendLink == BackendLink::Lan ? BackendLink::Public : BackendLink::Lan);
@@ -1645,6 +1693,8 @@ void setup() {
     fatal("Network task allocation failed");
   if (xTaskCreatePinnedToCore(hardwareTask, "sensors_led_oled", 6144, nullptr, 1, nullptr, 1) != pdPASS)
     fatal("Hardware task allocation failed");
+  if (xTaskCreatePinnedToCore(speakerTask, "speaker", 4096, nullptr, 3, nullptr, 1) != pdPASS)
+    fatal("Speaker task allocation failed");
 }
 
 void loop() {

@@ -639,17 +639,32 @@ TRẢ VỀ ĐỊNH DẠNG JSON THUẦN TÚY:
    * ("à", "ê", "này", "ơi", "nhé") are dropped too. found=false when the name is absent.
    */
   stripWakeWord(transcript: string): { found: boolean; request: string } {
-    const words = transcript.trim().split(/\s+/).filter(Boolean);
-    const norm = this.wakeTokens(words.join(' '));
     // "ơi" right after the name is often heard as "hơi", "rời" or "dời" (folded to "doi").
     const call = ['', 'oi', 'hoi', 'doi', 'ui', 'a', 'e', 'ha'];
+    // A clear call: only these make a misheard first syllable acceptable (see below).
+    const strongCall = new Set(['oi', 'hoi', 'doi', 'ui']);
     const filler = new Set([...call, 'nai', 'alo', 'nhe', 'nha', 'di']);
     const clean = (list: string[]) => list.join(' ').replace(/^[\s,.!?;:…-]+|[\s,;:…-]+$/g, '').trim();
     for (const wake of this.wakeWords()) {
+      // The recogniser sometimes glues the call to the name ("trợ lýơi"): split it again.
+      const words: string[] = [], norm: string[] = [];
+      for (const word of transcript.trim().split(/\s+/).filter(Boolean)) {
+        const token = this.wakeTokens(word)[0];
+        const rest = token.startsWith(wake.at(-1)!) ? token.slice(wake.at(-1)!.length) : '';
+        if (rest && strongCall.has(rest)) { words.push(word, ''); norm.push(wake.at(-1)!, rest); }
+        else { words.push(word); norm.push(token); }
+      }
+      // A two-syllable name may have its first syllable misheard ("trả lý ơi", "rửa lý ơi")
+      // when the second one and a clear call ("ơi") follow: nobody says "X lý ơi" otherwise.
+      // The second syllable may be heard with another vowel ("cả lê ơi"): "li" also matches "le".
+      const second = (token: string | undefined) => token === wake[1] || (wake[1] === 'li' && token === 'le');
+      const fuzzy = (at: number, callAt: number) => wake.length === 2 && at >= 0 && second(norm[at + 1]) &&
+        strongCall.has(norm[callAt] ?? '') && /^[a-z]{1,6}$/.test(norm[at] ?? '');
+      const exact = (at: number) => at >= 0 && wake.every((token, k) => norm[at + k] === token);
       // At the start.
       let i = 0;
       while (i < norm.length && filler.has(norm[i]) && norm[i] !== wake[0]) i++;
-      if (wake.every((token, k) => norm[i + k] === token)) {
+      if (exact(i) || fuzzy(i, i + 2)) {
         let j = i + wake.length;
         while (j < norm.length && call.includes(norm[j])) j++;
         return { found: true, request: clean(words.slice(j)) };
@@ -658,7 +673,7 @@ TRẢ VỀ ĐỊNH DẠNG JSON THUẦN TÚY:
       let end = norm.length;
       while (end > 0 && filler.has(norm[end - 1]) && norm[end - 1] !== wake.at(-1)) end--;
       const start = end - wake.length;
-      if (start >= 0 && wake.every((token, k) => norm[start + k] === token))
+      if (exact(start) || fuzzy(start, end))
         return { found: true, request: clean(words.slice(0, start)) };
     }
     return { found: false, request: transcript.trim() };

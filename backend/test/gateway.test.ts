@@ -69,7 +69,8 @@ test('WebSocket integrates microphone → AI → ack → OLED → PCM, interrupt
   assert.deepEqual(receivedHistory, []);
   assert.ok(messages.some(m => m.type === 'chat' && m.reply.includes('tắt')));
   assert.ok(messages.some(m => m.type === 'display' && Buffer.from(m.bitmap, 'base64').length === 448));
-  assert.ok(audio.every(frame => frame.length <= 640 && frame.length % 2 === 0));
+  // Frames of up to 2048 bytes (64 ms); the firmware accepts up to 4096 (max_audio_chunk_bytes).
+  assert.ok(audio.every(frame => frame.length <= 2048 && frame.length % 2 === 0));
   assert.equal((await history.recent('test-device')).length, 1);
   await sleep(1600);
   ttsFailure = true;

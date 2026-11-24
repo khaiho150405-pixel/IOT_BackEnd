@@ -44,6 +44,9 @@ interface Session {
   followTimer?: NodeJS.Timeout;
 }
 
+/** Speaker audio frame: 64 ms of PCM16 at 16 kHz (the device accepts up to 4096 bytes). */
+const AUDIO_FRAME_BYTES = 2048;
+
 /** ESP-IDF esp_reset_reason_t, reported by the firmware with each sensor message. */
 const RESET_REASONS: Record<number, string> = {
   0: 'unknown (e.g. after flashing over USB)', 1: 'power on', 2: 'external pin (RESET button)', 3: 'software restart', 4: 'crash (panic)',
@@ -397,14 +400,20 @@ ${alert.message}`);
     const finished = new Promise<void>(resolve => { s.playback = { id, resolve }; });
     this.send(s, { type: 'audio_start', id, duration_ms: Math.ceil(pcm.length / 32), mode: music ? 'music' : 'speech' });
     try {
-      for (let offset = 0; offset < pcm.length; offset += 640) {
+      // Paced by the clock with a lead: the device holds up to 2 s, so the first LEAD_MS go out
+      // at once and the rest stays LEAD_MS ahead of playback. Sending exactly in real time
+      // (20 ms, then sleep 20 ms) drifted behind by the send time of every frame and Wi-Fi
+      // jitter emptied the device buffer: choppy speech with clicks.
+      const leadMs = Number(process.env.SPEAKER_LEAD_MS || 700);
+      const started = performance.now();
+      for (let offset = 0; offset < pcm.length; offset += AUDIO_FRAME_BYTES) {
         signal.throwIfAborted();
         if (s.ws.readyState !== WebSocket.OPEN || s.ws.bufferedAmount > 32768) throw new Error('Audio network too slow');
-        const chunk = pcm.subarray(offset, offset + 640);
+        const ahead = offset / 32 - (performance.now() - started);
+        if (ahead > leadMs) await sleep(ahead - leadMs, undefined, { signal });
+        const chunk = pcm.subarray(offset, offset + AUDIO_FRAME_BYTES);
         await this.wait(new Promise<void>((resolve, reject) => s.ws.send(chunk, { binary: true }, error => error ? reject(error) : resolve())), signal);
         if (offset === 0) onFirstAudio?.();
-        // Never catch up with an unbounded burst after a stalled event loop.
-        await sleep(chunk.length / 32, undefined, { signal });
       }
       this.send(s, { type: 'audio_end', id });
       await this.wait(finished, AbortSignal.any([signal, AbortSignal.timeout(4000)]));

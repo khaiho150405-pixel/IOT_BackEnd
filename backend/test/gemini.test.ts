@@ -332,6 +332,16 @@ test('assistant name is recognised at the start or end and removed from the requ
     assert.deepEqual(ai.stripWakeWord('Trợ lý hơi bật đèn lên.'), { found: true, request: 'bật đèn lên.' });
     assert.deepEqual(ai.stripWakeWord('Trợ lý rời.'), { found: true, request: '' });
     assert.deepEqual(ai.stripWakeWord('các đèn đi chợ lý hơi.'), { found: true, request: 'các đèn đi' });
+    // Real recordings (PhoWhisper base/small): call glued to the name, first syllable misheard.
+    assert.deepEqual(ai.stripWakeWord('trợ lýơi có nghe tôi nói gì không.'), { found: true, request: 'có nghe tôi nói gì không.' });
+    assert.deepEqual(ai.stripWakeWord('trả lý ơi bật đèn'), { found: true, request: 'bật đèn' });
+    assert.deepEqual(ai.stripWakeWord('rửa lý ơi có nghe tôi nói gì không.'), { found: true, request: 'có nghe tôi nói gì không.' });
+    assert.deepEqual(ai.stripWakeWord('đã nghe được nhiều chưa trả lý ơi.'), { found: true, request: 'đã nghe được nhiều chưa' });
+    assert.deepEqual(ai.stripWakeWord('trợ ly ơi.'), { found: true, request: '' });
+    assert.deepEqual(ai.stripWakeWord('cả lê ơi một phần một cũng mấy.'), { found: true, request: 'một phần một cũng mấy.' });
+    // Without a clear call a misheard first syllable is not enough.
+    assert.equal(ai.stripWakeWord('xử lý xong rồi').found, false);
+    assert.equal(ai.stripWakeWord('quản lý nói gì').found, false);
     assert.equal(ai.stripWakeWord('Tắt đèn đi ngủ thôi').found, false);
     assert.equal(ai.stripWakeWord('Hôm nay trợ lý của sếp nghỉ ốm').found, false);
     process.env.WAKE_WORDS = 'Bông, trợ lý';

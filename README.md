@@ -5,7 +5,7 @@ ESP32-S3 thu âm, hiển thị OLED, bật/tắt LED và đo nhiệt độ/độ
 ```
 ESP32-S3 ──WebSocket (PCM 16 kHz)──▶ Backend NestJS (cổng 3100)
                                       ├─ Voice bridge Python (127.0.0.1:8010)
-                                      │    ├─ Nhận dạng tiếng Việt: PhoWhisper-base (VinAI), CPU int8
+                                      │    ├─ Nhận dạng tiếng Việt: PhoWhisper-small (VinAI) trên GPU, hoặc PhoWhisper-base trên CPU
                                       │    ├─ Nhận biết + nhận dạng tiếng Anh: Whisper base
                                       │    └─ Giọng đọc: Edge TTS (Internet) → giọng Windows "Microsoft An" (offline) khi Edge lỗi
                                       ├─ Ollama + Qwen 2.5 3B (127.0.0.1:11434): hiểu câu nói, phân loại ý định, trò chuyện
@@ -28,7 +28,7 @@ Mỗi lượt hội thoại: nói một câu, dừng ~1 giây; hệ thống nh�
 | `backend/scripts/local-voice-bridge.py` | Nhận dạng giọng nói + tổng hợp giọng (backend tự khởi chạy) |
 | `backend/requirements-local-voice.txt` | Gói Python cho voice bridge |
 | `backend/requirements-model-convert.txt` | Gói Python chỉ dùng một lần để tạo model PhoWhisper |
-| `scripts/setup-phowhisper.py` | Tải và chuyển đổi PhoWhisper-base → `models/phowhisper-base-ct2` |
+| `scripts/setup-phowhisper.py` | Tải và chuyển đổi PhoWhisper (`--size base` hoặc `small`) → `models/phowhisper-<size>-ct2` |
 | `scripts/start-local-xiaozhi.ps1` | Kiểm tra cấu hình, bật Ollama và chạy backend bằng một lệnh |
 | `scripts/fix-hotspot-firewall.ps1` | Mở TCP 3100, 3443, 1883 và UDP 5353 cho thiết bị trên Mobile Hotspot của Windows |
 | `models/` | Model đã chuyển đổi (tạo ra trên máy, không commit) |
@@ -112,6 +112,14 @@ py -3.12 scripts\setup-phowhisper.py
 ```
 
 Kết quả nằm ở `models\phowhisper-base-ct2` (đã có trong `.gitignore`). Có thể gỡ `torch`/`transformers` sau bước này. Lần chạy backend đầu tiên còn tự tải Whisper `base` (~150 MB, dùng cho tiếng Anh) vào cache Hugging Face.
+
+**Máy có GPU NVIDIA (≥ 4 GB, khuyên dùng):** PhoWhisper-small nghe rõ hơn nhiều. Trên các câu thu thật qua micro ESP32, nó nghe đúng "trợ lý ơi" ở 9/9 câu, còn base trên CPU chỉ đúng 2/9. Thời gian vẫn khoảng 0,9 giây mỗi câu, và chạy chung GPU với Qwen 2.5 3B được (khoảng 3,2/4 GB).
+
+```powershell
+py -3.12 scripts\setup-phowhisper.py --size small    # tải ~970 MB, ra models\phowhisper-small-ct2 (~250 MB)
+```
+
+Trong `backend\.env`: `LOCAL_WHISPER_MODEL=../models/phowhisper-small-ct2`, `LOCAL_ASR_DEVICE=cuda`, `LOCAL_ASR_BEAM_SIZE=5`. GPU cần thư viện CUDA 12 (cuBLAS, cuDNN 9); bản PyTorch CUDA (`torch` cu12x) đã có sẵn, voice bridge tự dùng chúng. Nếu GPU không chạy được, voice bridge tự chuyển sang CPU và ghi log `GPU speech recognition unavailable`. Không nên dùng `ASR_HOTWORDS`/`ASR_INITIAL_PROMPT`: khi thử, Whisper mất chữ hoặc lặp lại lời gợi ý. Đo độ chính xác bằng câu nói thật: đặt `ASR_DEBUG_DIR=<thư mục>` để lưu từng câu (WAV + kết quả); xong thì xóa dòng đó và xóa thư mục.
 
 ### Bước 7 – Cấu hình backend
 
