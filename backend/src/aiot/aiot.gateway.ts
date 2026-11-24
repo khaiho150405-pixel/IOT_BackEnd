@@ -9,6 +9,7 @@ import { applySpeakerVolume, decodeImaAdpcm, HighPassFilter, UtteranceDetector }
 import { OledRenderer } from './display';
 import { MusicLibrary } from './music';
 import { AiotMqttService } from './mqtt.service';
+import { SensorMonitor } from './sensor-monitor';
 import { AuthService } from '../auth/auth.service';
 import { routeUpgrade } from '../network/upgrade';
 
@@ -57,10 +58,18 @@ export class AiotGateway implements OnModuleDestroy {
     @Inject(HistoryStore) private history: HistoryStore,
     @Optional() @Inject(AiotMqttService) private mqtt?: AiotMqttService,
     @Optional() @Inject(AuthService) private auth?: AuthService,
+    @Optional() @Inject(SensorMonitor) private monitor?: SensorMonitor,
   ) {}
 
   attach(server: Server) {
     this.mqtt?.setGateway(this);
+    // Alerts: MQTT (retained, Home Assistant "Cảnh báo") and a short note on the OLED when idle.
+    this.monitor?.onAlert((deviceId, alert, raised) => {
+      this.mqtt?.publishAlert(deviceId, this.monitor!.activeAlerts(deviceId));
+      const session = [...this.sessions].find(s => s.id === deviceId && s.ws.readyState === WebSocket.OPEN);
+      if (raised && session && !session.busy) this.show(session, `Cảnh báo!
+${alert.message}`);
+    });
     // noServer + routeUpgrade: /aiot shares the HTTP server with the browser /api/live channel.
     this.server = new WebSocketServer({ noServer: true, maxPayload: 8192, perMessageDeflate: false,
       verifyClient: ({ req }, done) => {
@@ -211,6 +220,7 @@ export class AiotGateway implements OnModuleDestroy {
       this.sendListening(s);
       this.show(s, 'Dạ em chào đại ca!\nEm sẵn sàng rồi ạ.');
       this.mqtt?.publishState(s.id!, { connected: true, ledEnabled: s.ledEnabled, busy: false });
+      this.mqtt?.publishAlert(s.id!, this.monitor?.activeAlerts(s.id!) ?? []);
       return;
     }
     if (message.type === 'sensor') {
@@ -233,7 +243,10 @@ export class AiotGateway implements OnModuleDestroy {
       const { temperature: t, humidity: h } = message;
       s.sensor = message.valid === true && Number.isFinite(t) && Number.isFinite(h) &&
         t >= -40 && t <= 80 && h >= 0 && h <= 100 ? { temperature: t, humidity: h, receivedAt: Date.now() } : undefined;
-      if (s.sensor && s.id) this.mqtt?.publishSensor(s.id!, s.sensor);
+      if (s.sensor && s.id) {
+        this.mqtt?.publishSensor(s.id!, s.sensor);
+        this.monitor?.record(s.id, s.sensor.temperature, s.sensor.humidity, s.sensor.receivedAt);
+      }
     } else if (message.type === 'ack' && s.pending && message.id === s.pending.id) {
       if (message.device === 'led' && message.action === s.pending.action &&
           message.enabled === (s.pending.action === 'on')) {
@@ -275,6 +288,7 @@ export class AiotGateway implements OnModuleDestroy {
         receivedAt: new Date(s.sensor.receivedAt).toISOString(),
         stale: Date.now() - s.sensor.receivedAt >= 8000,
       } : null,
+      alerts: this.monitor?.activeAlerts(s.id!) ?? [],
     }));
   }
 

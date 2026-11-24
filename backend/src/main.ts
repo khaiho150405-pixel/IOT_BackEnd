@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import 'dotenv/config';
 import {
   BadGatewayException, BadRequestException, ConflictException, Controller,
-  Get, Inject, Module, NotFoundException, Param, Post, Body, Req, Res,
+  Get, Inject, Module, NotFoundException, Param, Post, Body, Query, Req, Res,
 } from '@nestjs/common';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { AuthController } from './auth/auth.controller';
@@ -16,6 +16,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createServer as createHttpsServer, Server as HttpsServer } from 'node:https';
 import { DevicesService } from './aiot/devices.service';
+import { HISTORY_RANGES, HistoryRange, SensorMonitor } from './aiot/sensor-monitor';
 import { LiveHub } from './network/live';
 import { ensureTls, TlsMaterial } from './network/tls';
 import { MdnsHandle, startMdns } from './network/mdns';
@@ -60,7 +61,8 @@ function deviceError(error: unknown, busyMessage: string): never {
 class HealthController {
   constructor(@Inject(AiotGateway) private readonly gateway: AiotGateway,
     @Inject(AuthService) private readonly auth: AuthService,
-    @Inject(DevicesService) private readonly devicesView: DevicesService) {}
+    @Inject(DevicesService) private readonly devicesView: DevicesService,
+    @Inject(SensorMonitor) private readonly monitor: SensorMonitor) {}
 
   @Get('health') health() {
     return {
@@ -172,6 +174,30 @@ class HealthController {
     }
   }
 
+  /** Sensor history (averages with min/max per bucket) and the alert limits to draw on the chart. */
+  @Get(['api/devices/:deviceId/history', 'api/mobile/devices/:deviceId/history'])
+  @Require('device:view', 'deviceId')
+  async sensorHistory(@Param('deviceId') deviceId: string, @Query('range') range?: string) {
+    const key = (range || '24h') as HistoryRange;
+    if (!Object.hasOwn(HISTORY_RANGES, key)) throw new BadRequestException(`range phải là một trong: ${Object.keys(HISTORY_RANGES).join(', ')}.`);
+    return { ...(await this.monitor.history(deviceId, key)), settings: this.monitor.getSettings() };
+  }
+
+  @Get('api/alerts/settings')
+  @Require('authenticated')
+  alertSettings() { return { settings: this.monitor.getSettings() }; }
+
+  @Post('api/alerts/settings')
+  @Require('device:manage')
+  updateAlertSettings(@Req() req: any, @Body() body: any) {
+    try {
+      const settings = this.monitor.updateSettings(body);
+      void this.auth.audit({ user: currentUser(req), source: clientSource(req), action: 'alert:settings', ip: clientIp(req),
+        detail: `${settings.enabled ? 'bật' : 'tắt'} · nhiệt độ ${settings.temperatureLow}–${settings.temperatureHigh} °C · độ ẩm ${settings.humidityLow}–${settings.humidityHigh} % · giữ ${settings.holdSeconds} s` });
+      return { settings };
+    } catch (error) { throw new BadRequestException((error as Error).message); }
+  }
+
   @Post(['api/devices/:deviceId/text', 'api/dashboard/devices/:deviceId/text', 'api/mobile/devices/:deviceId/text'])
   @Require('device:chat', 'deviceId')
   async submitText(@Req() req: any, @Param('deviceId') deviceId: string, @Body() body: any) {
@@ -191,7 +217,7 @@ class HealthController {
 @Module({
   controllers: [HealthController, AuthController],
   providers: [AuthService, { provide: APP_GUARD, useClass: AuthGuard },
-    AiotGateway, AiotService, HistoryStore, AiotMqttService, DevicesService, LiveHub],
+    AiotGateway, AiotService, HistoryStore, AiotMqttService, DevicesService, LiveHub, SensorMonitor],
 })
 class AppModule {}
 

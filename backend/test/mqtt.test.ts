@@ -204,11 +204,11 @@ test('MQTT over WebSocket (/mqtt) and Home Assistant discovery', async t => {
   ha.on('message', (topic, payload) => { if (topic.endsWith('/config')) configs.set(topic, JSON.parse(payload.toString())); });
   await ha.subscribeAsync('homeassistant/#');
 
-  // The device comes online: one HA device with seven entities, retained.
+  // The device comes online: one HA device with eight entities, retained.
   service.publishState(id, { connected: true, ledEnabled: false, busy: false });
   await pause();
   const node = 'aiot_7c4fad2b3d70';
-  assert.deepEqual([...configs.keys()].sort(), ['binary_sensor/busy', 'binary_sensor/online', 'light/led', 'sensor/humidity',
+  assert.deepEqual([...configs.keys()].sort(), ['binary_sensor/alert', 'binary_sensor/busy', 'binary_sensor/online', 'light/led', 'sensor/humidity',
     'sensor/reply', 'sensor/temperature', 'text/ask'].map(k => `homeassistant/${k.split('/')[0]}/${node}/${k.split('/')[1]}/config`).sort());
   const light = configs.get(`homeassistant/light/${node}/led/config`);
   assert.equal(light.command_topic, `aiot/device/${id}/led/set`);
@@ -229,7 +229,7 @@ test('MQTT over WebSocket (/mqtt) and Home Assistant discovery', async t => {
   configs.clear();
   ha.publish('homeassistant/status', 'online');
   await pause();
-  assert.equal(configs.size, 7, 'discovery re-sent on the HA birth message');
+  assert.equal(configs.size, 8, 'discovery re-sent on the HA birth message');
   // Accounts still cannot forge discovery configs.
   ha.publish(`homeassistant/light/${node}/led/config`, '{"name":"fake"}');
   await pause();

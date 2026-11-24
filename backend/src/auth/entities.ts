@@ -51,6 +51,19 @@ export interface AuditLog {
   result: 'ok' | 'denied' | 'error';
   ip: string;
 }
+/** One row per device per minute: average, minimum and maximum of the sensor reports. */
+export interface SensorReading {
+  id: string;
+  deviceId: string;
+  at: Date;
+  temperature: number;
+  humidity: number;
+  temperatureMin: number;
+  temperatureMax: number;
+  humidityMin: number;
+  humidityMax: number;
+  samples: number;
+}
 
 /** Column types differ between PostgreSQL and the SQLite (sql.js) fallback. */
 export function authEntities(postgres: boolean) {
@@ -120,6 +133,19 @@ export function authEntities(postgres: boolean) {
         ip: { type: String, length: 64, default: '' },
       },
       indices: [{ columns: ['at'] }, { columns: ['userId'] }],
+    }),
+    new EntitySchema<SensorReading>({
+      name: 'SensorReading', tableName: 'aiot_sensor_readings',
+      columns: {
+        id: { type: String, length: 100, primary: true },
+        deviceId: { type: String, length: 64 },
+        at: { type: date },
+        temperature: { type: 'float' }, humidity: { type: 'float' },
+        temperatureMin: { type: 'float' }, temperatureMax: { type: 'float' },
+        humidityMin: { type: 'float' }, humidityMax: { type: 'float' },
+        samples: { type: Number, default: 0 },
+      },
+      indices: [{ columns: ['deviceId', 'at'] }, { columns: ['at'] }],
     }),
   ];
 }

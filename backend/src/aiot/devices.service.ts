@@ -12,7 +12,7 @@ export class DevicesService {
     const [access, known] = await Promise.all([this.auth.deviceAccess(user), this.auth.listDevices()]);
     const live = new Map(this.gateway.dashboardDevices().map(d => [d.id, d]));
     return known.filter(d => access.has(d.id)).map(d => ({
-      ...(live.get(d.id) ?? { id: d.id, connected: false, busy: false, ledEnabled: undefined, sensor: null }),
+      ...(live.get(d.id) ?? { id: d.id, connected: false, busy: false, ledEnabled: undefined, sensor: null, alerts: [] }),
       name: d.name, roomId: d.roomId, lastSeenAt: d.lastSeenAt,
       canControl: access.get(d.id)!.control, canChat: access.get(d.id)!.chat,
     }));
@@ -33,6 +33,7 @@ export class DevicesService {
         connected: !!state?.connected,
         ledEnabled: state?.ledEnabled,
         sensor: state?.sensor ?? null,
+        alerts: state?.alerts ?? [],
         canControl: false, canChat: false,
       };
     });

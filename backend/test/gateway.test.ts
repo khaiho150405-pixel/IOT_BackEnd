@@ -389,7 +389,7 @@ test('spoken turns need the assistant name, except right after an answer', async
   };
   // MQTT retained state must follow every turn, or panels keep showing busy=true.
   const mqttStates: any[] = [];
-  const mqtt = { setGateway() {}, publishState: (_id: string, state: any) => mqttStates.push(state), publishSensor() {}, publishChat() {} };
+  const mqtt = { setGateway() {}, publishState: (_id: string, state: any) => mqttStates.push(state), publishSensor() {}, publishChat() {}, publishAlert() {} };
   const http = createServer(), gateway = new AiotGateway(ai as unknown as AiotService, new HistoryStore(), mqtt as any);
   const shown: string[] = [];
   const show = (gateway as any).show.bind(gateway);

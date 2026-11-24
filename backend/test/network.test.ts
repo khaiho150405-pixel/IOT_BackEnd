@@ -144,8 +144,9 @@ test('local HTTPS, certificate download, HTTPS redirect, PWA files and the live 
   assert.ok('sensor' in shown);
   assert.equal(shown.canControl, false);
   assert.ok(!JSON.stringify(publicDevices).includes('live-dev'), 'device id (MAC) is not exposed');
-  assert.deepEqual(Object.keys(shown).sort(), ['canChat', 'canControl', 'connected', 'id', 'ledEnabled', 'name', 'sensor']);
-  for (const path of ['/api/devices', '/api/users', '/api/audit'])
+  assert.deepEqual(Object.keys(shown).sort(), ['alerts', 'canChat', 'canControl', 'connected', 'id', 'ledEnabled', 'name', 'sensor']);
+  assert.deepEqual(shown.alerts, []);
+  for (const path of ['/api/devices', '/api/users', '/api/audit', '/api/alerts/settings'])
     assert.equal((await fetch(`http://127.0.0.1:${port}${path}`)).status, 401, `${path} needs an account`);
   const anonymousLed = await fetch(`http://127.0.0.1:${port}/api/devices/live-dev/led`, { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }) });

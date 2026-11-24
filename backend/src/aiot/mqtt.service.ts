@@ -222,6 +222,18 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Active alerts of one device (retained): {active, alerts: [{kind, value, threshold, since, message}]}. */
+  publishAlert(deviceId: string, alerts: Array<{ kind: string; value: number; threshold: number; since: string; message: string }>) {
+    if (!this.client || !this.client.connected) return;
+    const payload = JSON.stringify({
+      deviceId, active: alerts.length > 0, alerts,
+      message: alerts.map(a => a.message).join('; ') || 'Bình thường',
+      timestamp: new Date().toISOString(),
+    });
+    this.client.publish(`aiot/device/${deviceId}/alert`, payload, { qos: 1, retain: true });
+    this.client.publish('aiot/alert', payload, { qos: 1, retain: true });
+  }
+
   publishChat(deviceId: string, turn: DecisionValue) {
     if (!this.client || !this.client.connected) return;
     const payload = JSON.stringify({
@@ -278,6 +290,8 @@ export class AiotMqttService implements OnModuleInit, OnModuleDestroy {
         value_template: "{{ 'ON' if value_json.connected else 'OFF' }}" }],
       ['binary_sensor', 'busy', { name: 'Đang xử lý', state_topic: `${base}/state`, icon: 'mdi:robot',
         value_template: "{{ 'ON' if value_json.busy else 'OFF' }}", ...availability }],
+      ['binary_sensor', 'alert', { name: 'Cảnh báo', state_topic: `${base}/alert`, device_class: 'problem',
+        value_template: "{{ 'ON' if value_json.active else 'OFF' }}", json_attributes_topic: `${base}/alert` }],
       ['sensor', 'reply', { name: 'Trả lời gần nhất', state_topic: `${base}/chat`, icon: 'mdi:message-reply-text',
         value_template: '{{ value_json.reply[:250] }}' }],
       ['text', 'ask', { name: 'Hỏi trợ lý', command_topic: `${base}/command`, icon: 'mdi:chat-question', max: 200,

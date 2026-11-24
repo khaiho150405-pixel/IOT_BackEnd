@@ -75,6 +75,14 @@ export class AuthService implements OnModuleInit, OnModuleDestroy {
   }
   async onModuleDestroy() { if (this.db?.isInitialized) await this.db.destroy(); }
 
+  /** Shared database for other stores (sensor history); dir is the data folder (undefined in memory/PostgreSQL). */
+  async storage(): Promise<{ db: DataSource; dir?: string }> {
+    await this.ready();
+    const postgres = !!process.env.DATABASE_URL;
+    const file = process.env.AUTH_DB_FILE || join(process.cwd(), 'data', 'aiot.sqlite');
+    return { db: this.db, dir: postgres || file === ':memory:' ? undefined : dirname(file) };
+  }
+
   private loadSecret(file?: string): string {
     const configured = process.env.AUTH_JWT_SECRET?.trim();
     if (configured) {

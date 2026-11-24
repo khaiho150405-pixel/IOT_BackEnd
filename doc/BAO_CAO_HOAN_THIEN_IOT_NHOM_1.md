@@ -87,7 +87,7 @@
 - **Bảng 4:** Các topic MQTT và thực thể Home Assistant.
 - **Bảng 5:** Bảng dự toán và quyết toán kinh phí mua sắm linh kiện phần cứng thực tế.
 - **Bảng 6:** Tiến độ triển khai dự án.
-- **Bảng 7:** Kết quả kiểm thử tự động 40/40 ca kiểm thử trên Backend NestJS.
+- **Bảng 7:** Kết quả kiểm thử tự động 46/46 ca kiểm thử trên Backend NestJS.
 - **Bảng 8:** Kết quả đo đạc độ trễ các công đoạn xử lý trong hệ thống thực tế.
 
 ## DANH MỤC TỪ VIẾT TẮT
@@ -165,7 +165,8 @@ Các bo mạch IoT giá rẻ hoặc các giải pháp mã nguồn mở trước 
 6. **Xác nhận phần cứng (Hardware ACK):** Mọi lệnh điều khiển đèn chỉ được báo thành công khi ESP32 gửi xác nhận; lệnh chưa được xác nhận được tự gửi lại, đảm bảo trạng thái trên Web/MQTT khớp với thực tế.
 7. **Cấu hình Wi-Fi qua SoftAP Captive Portal:** Khi ESP32 không vào được backend, điểm phát `AIoT_Smart_Room` (192.168.4.1) được bật để chọn Wi-Fi từ danh sách quét được và nhập mật khẩu trên điện thoại; thiết bị nhớ tối đa 5 mạng và tự vào mạng đã lưu có sóng mạnh nhất.
 8. **Giám sát và điều khiển đa nền tảng:** Web Dashboard và Mobile Web App (PWA) có tài khoản đăng nhập; khách không đăng nhập chỉ xem nhiệt độ, độ ẩm và trạng thái đèn; MQTT cho app di động và Home Assistant.
-9. **Truy cập an toàn qua Internet:** Tên miền cố định `https://aiot.eduscore.id.vn` qua đường hầm Cloudflare riêng, có HTTPS, không cần mở cổng router.
+9. **Lịch sử cảm biến và cảnh báo:** Lưu nhiệt độ, độ ẩm mỗi phút (30 ngày), biểu đồ 1 giờ / 24 giờ / 7 ngày / 30 ngày trên dashboard; cảnh báo khi vượt ngưỡng (dashboard, thông báo trình duyệt, OLED, MQTT, Home Assistant, nhật ký), ngưỡng chỉnh được.
+10. **Truy cập an toàn qua Internet:** Tên miền cố định `https://aiot.eduscore.id.vn` qua đường hầm Cloudflare riêng, có HTTPS, không cần mở cổng router.
 
 ## 2.2. Những điểm nâng cấp so với đề cương ban đầu
 Trong quá trình hiện thực hóa đồ án, nhóm đã rà soát, tái cấu trúc và bổ sung nhiều công nghệ mà đề cương ban đầu chưa đề cập:
@@ -436,21 +437,22 @@ Phần mềm sử dụng đều miễn phí: Ollama, Qwen 2.5, PhoWhisper, NestJ
 | **Tuần 4** | - Wi-Fi SoftAP Captive Portal trên ESP32.<br>- Web Control Desk và Mobile Web App (`/mobile`).<br>- Phân trang bitmap tiếng Việt 128x28 trên OLED. | Đỗ Trọng Vĩ,<br>Phan Đức Thể,<br>Trần Quốc Việt | Đổi mạng bằng điện thoại; OLED hiển thị tiếng Việt có dấu. |
 | **Tuần 5** | - Hoàn thiện Half-Duplex Echo Prevention (`playback_done`).<br>- Tối ưu luồng xử lý lệnh thiết bị.<br>- Viết bộ kiểm thử tự động cho các module Backend. | Hồ Sĩ Khải,<br>Trần Quốc Việt | Hết hiện tượng AI tự nghe giọng mình và tự nói liên tục. |
 | **Tuần 6** | - Lắp ráp mô hình sa bàn.<br>- Đo đạc độ trễ, thử nghiệm hoạt động.<br>- Soạn báo cáo và slide. | Toàn thể 7 thành viên | Hệ thống vận hành ổn định trong phòng lab. |
-| **Giai đoạn hoàn thiện** | - Đổi chân đấu dây không bắt chéo, sửa OLED bị sọc.<br>- Tìm và sửa nguyên nhân phản hồi chậm (vòng lặp mạng treo tới 10 s).<br>- Gọi tên "Trợ lý ơi", nghe tiếp 10 s, thanh trạng thái OLED.<br>- Tài khoản, khách chỉ xem, an toàn khi đưa ra Internet.<br>- Tên miền cố định, khởi động bằng một file, MQTT qua WebSocket, Home Assistant, ESP32 kết nối `wss://`. | Hồ Sĩ Khải | Kiểm thử tự động 40/40, kiểm tra đồng bộ chéo 11/11; hệ thống chạy qua `https://aiot.eduscore.id.vn`. |
+| **Giai đoạn hoàn thiện** | - Đổi chân đấu dây không bắt chéo, sửa OLED bị sọc.<br>- Tìm và sửa nguyên nhân phản hồi chậm (vòng lặp mạng treo tới 10 s).<br>- Gọi tên "Trợ lý ơi", nghe tiếp 10 s, thanh trạng thái OLED.<br>- Tài khoản, khách chỉ xem, an toàn khi đưa ra Internet.<br>- Tên miền cố định, khởi động bằng một file, MQTT qua WebSocket, Home Assistant, ESP32 kết nối `wss://`.<br>- Lịch sử cảm biến, biểu đồ và cảnh báo vượt ngưỡng. | Hồ Sĩ Khải | Kiểm thử tự động 46/46, kiểm tra đồng bộ chéo 11/11; hệ thống chạy qua `https://aiot.eduscore.id.vn`. |
 
 ---
 
 ## 6.2. Kết quả kiểm thử tự động hệ thống Backend
-Bộ kiểm thử tự động (Node.js test runner, chạy bằng `npm test` trong thư mục `backend`) gồm **40 ca kiểm thử**, kết quả **40/40 đạt**. Các ca kiểm thử khởi chạy Backend thật, broker MQTT thật và thiết bị ESP32 giả lập qua WebSocket:
+Bộ kiểm thử tự động (Node.js test runner, chạy bằng `npm test` trong thư mục `backend`) gồm **46 ca kiểm thử**, kết quả **46/46 đạt**. Các ca kiểm thử khởi chạy Backend thật, broker MQTT thật và thiết bị ESP32 giả lập qua WebSocket:
 
 | Nhóm | Số ca | Nội dung kiểm thử chính |
 |:---|:---:|:---|
-| Âm thanh & VAD | 6 | VAD bỏ im lặng, giữ phần đầu câu, cắt câu quá dài; bỏ tiếng click; đọc WAV; đổi tần số 24→16 kHz; lọc ù tần số thấp; chỉnh âm lượng loa. |
+| Âm thanh & VAD | 7 | VAD bỏ im lặng, giữ phần đầu câu, cắt câu quá dài; bỏ tiếng click; đọc WAV; đổi tần số 24→16 kHz; lọc ù tần số thấp; chỉnh âm lượng loa. Nén/giải nén IMA ADPCM. |
 | OLED & Nhạc & Lịch sử | 5 | Render tiếng Việt thành bitmap 128x28 phân trang; tách vùng câu hỏi/câu trả lời; kiểm tra thư viện nhạc WAV/MP4; giữ 5 lượt hội thoại mỗi thiết bị. |
 | Tài khoản & Bảo mật | 6 | Mật khẩu scrypt, JWT chống sửa/hết hạn; một loại tài khoản; thu hồi phiên khi đổi mật khẩu/khóa; khóa đăng nhập sau nhiều lần sai; không giả được địa chỉ qua đường hầm; chặn dò mật khẩu nhiều tên từ một địa chỉ. |
-| Gateway & Hội thoại | 8 | Luồng micro → AI → ACK → OLED → âm thanh, ngắt lượt, phục hồi khi TTS lỗi; xác thực mã thiết bị; câu gõ trên dashboard; hết thời gian vẫn mở lại micro; bật/tắt đèn liên tiếp; kết nối lại thay kết nối cũ; gọi tên và cửa sổ nghe tiếp 10 s kèm đếm ngược. |
+| Gateway & Hội thoại | 9 | Luồng micro → AI → ACK → OLED → âm thanh, ngắt lượt, phục hồi khi TTS lỗi; xác thực mã thiết bị; câu gõ trên dashboard; hết thời gian vẫn mở lại micro; bật/tắt đèn liên tiếp; kết nối lại thay kết nối cũ; gọi tên và cửa sổ nghe tiếp 10 s kèm đếm ngược. Thiết bị gửi micro dạng ADPCM. |
 | AI (Qwen/Gemini) | 11 | Mọi câu đi qua Qwen và được kiểm chứng; câu phủ định không điều khiển; luật dự phòng khi Ollama lỗi; không nhận phát nhạc khi không có bài; phép tính chính xác; hỏi lại khi nghe không rõ; nhận tên gọi ở đầu/cuối câu và các cách nghe sai; bộ nhớ đệm giọng đọc. |
 | MQTT & Home Assistant | 3 | Broker nhúng, telemetry, lệnh đèn/câu hỏi; bắt buộc tài khoản, chặn dữ liệu giả; MQTT qua WebSocket `/mqtt` và Home Assistant Discovery. |
+| Lịch sử cảm biến & Cảnh báo | 4 | Gộp số đo theo phút (trung bình, thấp nhất, cao nhất), lưu và đọc theo khoảng 1 giờ/24 giờ; gộp có trọng số; kiểm tra ngưỡng nhập vào; cảnh báo chỉ bật sau thời gian giữ, giữ trong biên trễ, tự tắt, ghi nhật ký, tắt khi đổi ngưỡng. |
 | Mạng & HTTPS | 1 | HTTPS nội bộ, tải chứng chỉ, chuyển hướng HTTPS (không chuyển hướng khi đã là HTTPS qua đường hầm), PWA, kênh trực tiếp và giới hạn khách. |
 
 Kết quả rút gọn của lần chạy gần nhất:
@@ -525,14 +527,14 @@ Các số liệu dưới đây được đo trên hệ thống thật (laptop GP
 - **Nhận dạng giọng nói** đôi khi nghe sai (đặc biệt với tên gọi và giọng máy); hệ thống đã chấp nhận các biến thể thường gặp và hỏi lại khi không chắc chắn.
 - **Giọng đọc:** khi Edge-TTS không dùng được, giọng Windows offline nghe còn máy móc.
 - **Kết nối `wss://` của ESP32** đã chạy được nhưng mới thử qua hotspot của laptop (thỉnh thoảng rớt rồi tự nối lại); cần thử thêm trên router Wi-Fi thông thường. ESP32 chỉ dùng Wi-Fi 2.4 GHz và WPA2 thường.
-- Mỗi lần thu âm, Whisper vẫn phải nghe câu nói để tìm tên gọi (tốn CPU); lịch sử hội thoại chỉ giữ trong bộ nhớ khi chưa cấu hình PostgreSQL; chưa có biểu đồ lịch sử cảm biến.
+- Mỗi lần thu âm, Whisper vẫn phải nghe câu nói để tìm tên gọi (tốn CPU); lịch sử hội thoại chỉ giữ trong bộ nhớ khi chưa cấu hình PostgreSQL; cảnh báo chỉ đẩy tới trình duyệt đang mở dashboard (chưa có thông báo đẩy khi đóng trình duyệt).
 - Máy chủ cần GPU (≥ 4 GB) để Qwen trả lời nhanh.
 
 ## 8.3. Hướng phát triển trong tương lai
 1. **Nhận diện từ đánh thức ngay trên ESP32-S3** (ESP-SR WakeNet): chỉ gửi âm thanh sau khi nghe tên, giảm tải và tăng riêng tư.
 2. **Ứng dụng Android** có thông báo đẩy (nhiệt độ cao, thiết bị mất kết nối) và nói lệnh ngay trên điện thoại.
 3. **Khử tiếng vọng chủ động (AEC)** để chen ngang bằng giọng nói khi AI đang nói.
-4. **Giọng đọc tiếng Việt tự nhiên chạy offline**, lịch sử cảm biến và biểu đồ, kịch bản tự động ("trên 30°C thì cảnh báo").
+4. **Giọng đọc tiếng Việt tự nhiên chạy offline**; kịch bản tự động dựa trên cảnh báo (ví dụ "trên 33 °C thì bật quạt qua relay").
 5. **Điều khiển thiết bị điện thật** qua module relay cách ly; nhiều phòng, nhiều ESP32.
 6. **Cập nhật firmware từ xa (OTA)** và mã riêng cho từng thiết bị; kết nối chuẩn Matter.
 

@@ -67,6 +67,17 @@
     .chart-axis { fill: #73808c; font-size: 9px; }
     .chart-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .chart-point { stroke: #fff; stroke-width: 1.5; }
+    .chart-band { stroke: none; opacity: .16; }
+    .chart-limit { stroke: #bd4b45; stroke-width: 1; stroke-dasharray: 4 3; opacity: .7; }
+    .chart-limit-label { fill: #bd4b45; font-size: 8px; }
+    .range-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 12px; }
+    .range-tab { padding: 5px 10px; border: 1px solid #cbd5dd; border-radius: 999px; background: #fff; color: #526170; font-size: 11px; cursor: pointer; }
+    .range-tab.active { border-color: #456780; background: #456780; color: #fff; }
+    .alert-banner { margin-top: 14px; padding: 10px 12px; border: 1px solid #e3b5b2; border-radius: 8px; background: #fbeeed; color: #8a302b; font-size: 12px; line-height: 1.55; }
+    .alert-banner strong { display: block; margin-bottom: 2px; }
+    .metric.alerting { border-color: #e3b5b2; background: #fdf6f5; }
+    .metric.alerting .metric-value { color: #a33a34; }
+    .check-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: #354555; font-size: 12px; }
     .chart-empty { height: 92px; display: grid; place-items: center; color: #788692; font-size: 11px; }
     .led-card { display: flex; flex-direction: column; min-height: 100%; }
     .led-state { display: flex; align-items: center; gap: 10px; margin: 24px 0 20px; }
@@ -158,7 +169,7 @@
       .chat-form { flex-direction: column; }
       .send-button { min-height: 44px; }
       .bubble-row { max-width: 94%; }
-      .admin-grid, .form-row { grid-template-columns: 1fr; }
+      .admin-grid, .form-row, #alertForm .form-row { grid-template-columns: 1fr !important; }
       .table-wrap { font-size: 10px; }
     }</style>
 </head>
@@ -182,9 +193,11 @@
     <section id="dashboard" class="grid" hidden>
       <article class="card">
         <div class="card-head"><div class="card-title">Môi trường trong phòng</div><div class="card-note" id="sensorUpdated">Đang chờ dữ liệu cảm biến</div></div>
+        <div id="alertBanner" class="alert-banner" role="alert" hidden></div>
+        <div id="rangeTabs" class="range-tabs" role="tablist" aria-label="Khoảng thời gian của biểu đồ" hidden><button class="range-tab active" type="button" data-range="live">Trực tiếp</button><button class="range-tab" type="button" data-range="1h">1 giờ</button><button class="range-tab" type="button" data-range="24h">24 giờ</button><button class="range-tab" type="button" data-range="7d">7 ngày</button><button class="range-tab" type="button" data-range="30d">30 ngày</button></div>
         <div class="metrics">
-          <div class="metric"><div class="metric-top"><span>NHIỆT ĐỘ</span><span class="metric-icon" aria-hidden="true">°</span></div><div class="metric-value"><span id="temperature">--.-</span><small> °C</small></div><div class="metric-foot" id="temperatureFoot">Chưa có số đo</div><div class="chart-area"><div class="chart-heading">Xu hướng · 30 lần đo gần nhất</div><div id="temperatureChart" class="chart" aria-label="Biểu đồ nhiệt độ"></div></div></div>
-          <div class="metric"><div class="metric-top"><span>ĐỘ ẨM</span><span class="metric-icon" aria-hidden="true">%</span></div><div class="metric-value"><span id="humidity">--.-</span><small> %</small></div><div class="metric-foot" id="humidityFoot">Chưa có số đo</div><div class="chart-area"><div class="chart-heading">Xu hướng · 30 lần đo gần nhất</div><div id="humidityChart" class="chart" aria-label="Biểu đồ độ ẩm"></div></div></div>
+          <div class="metric" id="temperatureMetric"><div class="metric-top"><span>NHIỆT ĐỘ</span><span class="metric-icon" aria-hidden="true">°</span></div><div class="metric-value"><span id="temperature">--.-</span><small> °C</small></div><div class="metric-foot" id="temperatureFoot">Chưa có số đo</div><div class="chart-area"><div class="chart-heading" data-chart-heading>Xu hướng · 30 lần đo gần nhất</div><div id="temperatureChart" class="chart" aria-label="Biểu đồ nhiệt độ"></div></div></div>
+          <div class="metric" id="humidityMetric"><div class="metric-top"><span>ĐỘ ẨM</span><span class="metric-icon" aria-hidden="true">%</span></div><div class="metric-value"><span id="humidity">--.-</span><small> %</small></div><div class="metric-foot" id="humidityFoot">Chưa có số đo</div><div class="chart-area"><div class="chart-heading" data-chart-heading>Xu hướng · 30 lần đo gần nhất</div><div id="humidityChart" class="chart" aria-label="Biểu đồ độ ẩm"></div></div></div>
         </div>
       </article>
 
@@ -210,6 +223,23 @@
     </section>
     <!-- Signed-in accounts: accounts, devices, rooms -->
     <section id="adminSection" class="admin-section" hidden>
+      <article class="card" style="margin-bottom:14px">
+        <div class="card-head"><div class="card-title">Cảnh báo nhiệt độ, độ ẩm</div><div class="card-note">Ngoài ngưỡng liên tục quá thời gian giữ → cảnh báo trên dashboard, OLED, MQTT, Home Assistant và nhật ký</div></div>
+        <form id="alertForm">
+          <label class="check-row"><input type="checkbox" name="enabled"> Bật cảnh báo</label>
+          <div class="form-row" style="grid-template-columns: repeat(5, 1fr)">
+            <label class="field">Nhiệt độ thấp (°C)<input name="temperatureLow" type="number" step="0.1" required></label>
+            <label class="field">Nhiệt độ cao (°C)<input name="temperatureHigh" type="number" step="0.1" required></label>
+            <label class="field">Độ ẩm thấp (%)<input name="humidityLow" type="number" step="1" required></label>
+            <label class="field">Độ ẩm cao (%)<input name="humidityHigh" type="number" step="1" required></label>
+            <label class="field">Thời gian giữ (giây)<input name="holdSeconds" type="number" step="1" min="0" max="3600" required></label>
+          </div>
+          <div class="form-row" style="grid-template-columns: 1fr 1fr">
+            <button class="action" type="submit">Lưu ngưỡng cảnh báo</button>
+            <button class="action" id="notifyBtn" type="button">🔔 Bật thông báo trên trình duyệt</button>
+          </div>
+        </form>
+      </article>
       <article class="card">
         <div class="card-head"><div class="card-title">Tài khoản</div><div class="card-note">Mọi tài khoản đều điều khiển được thiết bị và tạo thêm tài khoản · Người chưa đăng nhập chỉ xem nhiệt độ, độ ẩm, trạng thái đèn</div></div>
         <div class="table-wrap"><table class="data"><thead><tr><th>Tài khoản</th><th>Trạng thái</th><th>Tạo lúc</th><th></th></tr></thead><tbody id="userRows"></tbody></table></div>
@@ -273,7 +303,8 @@
 
   <script>
     const state = { devices: [], selected: '', busy: false, chatSending: false, events: [], polling: false, chat: [], sensorHistory: Object.create(null),
-      session: null, setupRequired: false, users: [], rooms: [], adminLoaded: 0 };
+      session: null, setupRequired: false, users: [], rooms: [], adminLoaded: 0,
+      range: 'live', historyData: null, alertSettings: null, seenAlerts: new Set(), alertsPrimed: false };
     const $ = id => document.getElementById(id);
     const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
     const SOURCE = { web: 'Web', app: 'App', voice: 'Giọng nói', mqtt: 'MQTT', system: 'Hệ thống' };
@@ -391,21 +422,32 @@
         if (points.length > 30) points.splice(0, points.length - 30);
       }
     }
-    function renderChart(elementId, points, field, unit) {
+    /**
+     * Line chart. points: [{at, value, min?, max?}]; min/max draw a light band (history ranges);
+     * limits: alert thresholds drawn as dashed red lines; long ranges label dates instead of times.
+     */
+    function renderChart(elementId, points, field, unit, options = {}) {
       const element = $(elementId);
-      if (!points.length) { element.innerHTML = '<div class="chart-empty">Đang chờ dữ liệu cảm biến</div>'; return; }
+      if (!points.length) { element.innerHTML = `<div class="chart-empty">${esc(options.empty || 'Đang chờ dữ liệu cảm biến')}</div>`; return; }
       const humidity = field === 'humidity';
-      const values = points.map(point => point[field]);
-      let low = 0, high = 100;
-      if (!humidity) {
-        const minimum = Math.min(...values), maximum = Math.max(...values);
-        const padding = Math.max(1, (maximum - minimum) * .12);
-        low = Math.floor((minimum - padding) / 5) * 5;
-        high = Math.ceil((maximum + padding) / 5) * 5;
-        if (high - low < 5) high = low + 5;
-      }
+      const values = points.map(point => point.value);
+      const limits = (options.limits || []).filter(Number.isFinite);
+      const span = [...values, ...points.flatMap(p => [p.min, p.max]).filter(Number.isFinite)];
+      // Show a limit line only when the data comes near it (otherwise the scale flattens the data).
+      const near = limits.filter(v => v >= Math.min(...span) - 5 && v <= Math.max(...span) + 5);
+      const all = [...span, ...near];
+      const step = humidity ? 10 : 5;
+      const minimum = Math.min(...all), maximum = Math.max(...all);
+      const padding = Math.max(humidity ? 2 : 1, (maximum - minimum) * .12);
+      let low = Math.floor((minimum - padding) / step) * step;
+      let high = Math.ceil((maximum + padding) / step) * step;
+      if (humidity) { low = Math.max(0, low); high = Math.min(100, high); }
+      if (high - low < step) high = low + step;
       const left = 36, right = 294, top = 8, bottom = 68;
-      const x = index => points.length === 1 ? right : left + index * (right - left) / (points.length - 1);
+      const times = points.map(p => Date.parse(p.at));
+      const t0 = times[0], t1 = times.at(-1);
+      const x = index => points.length === 1 ? right :
+        left + (options.byTime && t1 > t0 ? (times[index] - t0) / (t1 - t0) : index / (points.length - 1)) * (right - left);
       const y = value => top + (high - value) * (bottom - top) / (high - low);
       const color = humidity ? '#54877b' : '#4f7394';
       const grid = [0, .5, 1].map(position => {
@@ -414,10 +456,87 @@
         const py = top + (bottom - top) * position;
         return `<line class="chart-grid" x1="${left}" y1="${py}" x2="${right}" y2="${py}"/><text class="chart-axis" x="0" y="${py + 3}">${label}</text>`;
       }).join('');
-      const path = points.map((point, index) => `${index ? 'L' : 'M'}${x(index).toFixed(1)},${y(point[field]).toFixed(1)}`).join(' ');
-      const dots = points.map((point, index) => `<circle class="chart-point" cx="${x(index).toFixed(1)}" cy="${y(point[field]).toFixed(1)}" r="${index === points.length - 1 ? 3 : 1.6}" fill="${color}"/>`).join('');
-      const time = value => new Date(value).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-      element.innerHTML = `<svg viewBox="0 0 300 92" preserveAspectRatio="none" aria-hidden="true"><g>${grid}</g><path class="chart-line" d="${path}" stroke="${color}"/>${dots}<text class="chart-axis" x="${left}" y="88">${time(points[0].receivedAt)}</text><text class="chart-axis" x="${right}" y="88" text-anchor="end">${time(points.at(-1).receivedAt)} · ${values.at(-1).toFixed(1)} ${unit}</text></svg>`;
+      // The line breaks where readings are missing (device off) for longer than gapMs.
+      const gap = options.gapMs || Infinity;
+      const joined = index => index && times[index] - times[index - 1] <= gap;
+      const path = points.map((point, index) => `${joined(index) ? 'L' : 'M'}${x(index).toFixed(1)},${y(point.value).toFixed(1)}`).join(' ');
+      let band = '';
+      if (points.some(p => Number.isFinite(p.min) && p.max !== p.min)) {
+        const upper = points.map((p, i) => `${x(i).toFixed(1)},${y(p.max).toFixed(1)}`);
+        const lower = points.map((p, i) => `${x(i).toFixed(1)},${y(p.min).toFixed(1)}`).reverse();
+        band = `<path class="chart-band" d="M${upper.join(' L')} L${lower.join(' L')} Z" fill="${color}"/>`;
+      }
+      const limitLines = near.filter(v => v >= low && v <= high).map(v =>
+        `<line class="chart-limit" x1="${left}" y1="${y(v).toFixed(1)}" x2="${right}" y2="${y(v).toFixed(1)}"/>` +
+        `<text class="chart-limit-label" x="${right}" y="${(y(v) - 2).toFixed(1)}" text-anchor="end">ngưỡng ${v}</text>`).join('');
+      const dots = points.length > 60 ? '' : points.map((point, index) =>
+        `<circle class="chart-point" cx="${x(index).toFixed(1)}" cy="${y(point.value).toFixed(1)}" r="${index === points.length - 1 ? 3 : 1.6}" fill="${color}"/>`).join('');
+      const time = value => options.dates ?
+        new Date(value).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) :
+        new Date(value).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+      const lastLabel = options.summary || `${values.at(-1).toFixed(1)} ${unit}`;
+      element.innerHTML = `<svg viewBox="0 0 300 92" preserveAspectRatio="none" aria-hidden="true"><g>${grid}</g>${band}${limitLines}<path class="chart-line" d="${path}" stroke="${color}"/>${dots}<text class="chart-axis" x="${left}" y="88">${time(points[0].at)}</text><text class="chart-axis" x="${right}" y="88" text-anchor="end">${time(points.at(-1).at)} · ${esc(lastLabel)}</text></svg>`;
+    }
+    const RANGE_LABEL = {
+      live: 'Xu hướng · 30 lần đo gần nhất',
+      '1h': 'Trung bình mỗi phút · 1 giờ qua',
+      '24h': 'TB 5 phút · 24 giờ qua · vùng mờ: thấp–cao',
+      '7d': 'TB 30 phút · 7 ngày qua · vùng mờ: thấp–cao',
+      '30d': 'TB 2 giờ · 30 ngày qua · vùng mờ: thấp–cao',
+    };
+    function renderCharts(selected) {
+      document.querySelectorAll('[data-chart-heading]').forEach(el => { el.textContent = RANGE_LABEL[state.range]; });
+      const limits = state.alertSettings?.enabled ? state.alertSettings : null;
+      const tLimits = limits ? [limits.temperatureLow, limits.temperatureHigh] : [];
+      const hLimits = limits ? [limits.humidityLow, limits.humidityHigh] : [];
+      if (state.range === 'live') {
+        const history = state.sensorHistory[selected.id] || [];
+        renderChart('temperatureChart', history.map(p => ({ at: p.receivedAt, value: p.temperature })), 'temperature', '°C', { limits: tLimits });
+        renderChart('humidityChart', history.map(p => ({ at: p.receivedAt, value: p.humidity })), 'humidity', '%', { limits: hLimits });
+        return;
+      }
+      const data = state.historyData;
+      if (!data || data.deviceId !== selected.id || data.range !== state.range || data.error) {
+        for (const id of ['temperatureChart', 'humidityChart']) $(id).innerHTML = `<div class="chart-empty">${esc(data?.error && data.range === state.range ? data.error : 'Đang tải lịch sử…')}</div>`;
+        return;
+      }
+      const opts = { byTime: true, dates: state.range !== '1h', gapMs: data.bucketMinutes * 60000 * 3, empty: 'Chưa có số đo trong khoảng này' };
+      const stats = key => data.points.length ?
+        `${Math.min(...data.points.map(p => p[key + 'Min'])).toFixed(1)}–${Math.max(...data.points.map(p => p[key + 'Max'])).toFixed(1)}` : '';
+      renderChart('temperatureChart', data.points.map(p => ({ at: p.at, value: p.temperature, min: p.temperatureMin, max: p.temperatureMax })),
+        'temperature', '°C', { ...opts, limits: tLimits, summary: `${stats('temperature')} °C` });
+      renderChart('humidityChart', data.points.map(p => ({ at: p.at, value: p.humidity, min: p.humidityMin, max: p.humidityMax })),
+        'humidity', '%', { ...opts, limits: hLimits, summary: `${stats('humidity')} %` });
+    }
+    async function loadHistory() {
+      const selected = state.devices.find(device => device.id === state.selected);
+      if (!selected || state.range === 'live' || !signedIn()) return;
+      const range = state.range, deviceId = selected.id;
+      try {
+        const result = await request(`/api/devices/${encodeURIComponent(deviceId)}/history?range=${range}`);
+        state.alertSettings = result.settings;
+        state.historyData = { ...result, deviceId, range };
+      } catch (error) { state.historyData = { deviceId, range, points: [], error: `Không tải được lịch sử: ${error.message}` }; }
+      const current = state.devices.find(device => device.id === state.selected);
+      if (current && state.range === range && current.id === deviceId) renderCharts(current);
+    }
+    /** Banner, highlighted metrics, and a toast/notification for each newly raised alert. */
+    function renderAlerts(selected) {
+      const alerts = selected.alerts || [];
+      const banner = $('alertBanner');
+      banner.hidden = !alerts.length;
+      banner.innerHTML = alerts.map(a => `<strong>⚠ ${esc(a.message)}</strong>Từ ${new Date(a.since).toLocaleTimeString('vi-VN')} · hiện tại ${Number(a.value).toFixed(1).replace('.', ',')}`).join('<br>');
+      $('temperatureMetric').classList.toggle('alerting', alerts.some(a => a.kind.startsWith('temperature')));
+      $('humidityMetric').classList.toggle('alerting', alerts.some(a => a.kind.startsWith('humidity')));
+      const keys = new Set(alerts.map(a => `${selected.id}|${a.kind}|${a.since}`));
+      for (const a of alerts) {
+        const key = `${selected.id}|${a.kind}|${a.since}`;
+        // Alerts already active when the page opens are shown in the banner only, not announced.
+        if (state.seenAlerts.has(key) || !state.alertsPrimed) continue;
+        addEvent(`Cảnh báo: ${a.message}`, 'error'); note(`⚠ ${a.message}`, true);
+        try { if ('Notification' in window && Notification.permission === 'granted') new Notification('AIoT Smart Room', { body: a.message, icon: '/icons/icon-192.png', tag: key }); } catch { }
+      }
+      state.seenAlerts = keys; state.alertsPrimed = true;
     }
     function render(devices) {
       const oldSelected = state.selected; state.devices = devices;
@@ -458,9 +577,10 @@
       $('temperatureFoot').textContent = sensor ? sensor.stale ? 'Số đo đã cũ' : 'Đang cập nhật từ ESP32' : 'Chưa có số đo';
       $('humidityFoot').textContent = $('temperatureFoot').textContent;
       $('sensorUpdated').textContent = sensor ? `Cập nhật ${new Date(sensor.receivedAt).toLocaleTimeString('vi-VN')}${sensor.stale ? ' · đã cũ' : ''}` : 'Đang chờ dữ liệu cảm biến';
-      const history = state.sensorHistory[selected.id] || [];
-      renderChart('temperatureChart', history, 'temperature', '°C');
-      renderChart('humidityChart', history, 'humidity', '%');
+      $('rangeTabs').hidden = !signedIn();
+      if (!signedIn() && state.range !== 'live') setRange('live');
+      renderCharts(selected);
+      renderAlerts(selected);
       const room = state.rooms.find(r => r.id === selected.roomId);
       $('deviceDetails').innerHTML = `<div class="detail-row"><span>Tên</span><span>${esc(selected.name || selected.id)}</span></div>${signedIn() ? `<div class="detail-row"><span>Mã thiết bị</span><span>${esc(selected.id)}</span></div><div class="detail-row"><span>Phòng</span><span>${esc(room?.name || '—')}</span></div>` : ''}<div class="detail-row"><span>WebSocket</span><span>${selected.connected ? 'Đã kết nối' : 'Mất kết nối'}</span></div><div class="detail-row"><span>Bạn có thể</span><span>${signedIn() ? 'Xem · Điều khiển · Chat AI' : 'Chỉ xem (chưa đăng nhập)'}</span></div>${selected.connectedAt ? `<div class="detail-row"><span>Kết nối từ</span><span>${new Date(selected.connectedAt).toLocaleString('vi-VN')}</span></div>` : ''}`;
       if (oldSelected !== state.selected) addEvent(`Đang theo dõi thiết bị ${selected.name || selected.id}`);
@@ -518,7 +638,49 @@
       finally { state.busy = false; render(state.devices); }
     }
     $('turnOn').addEventListener('click', () => setLed(true)); $('turnOff').addEventListener('click', () => setLed(false));
-    $('deviceSelect').addEventListener('change', event => { state.selected = event.target.value; render(state.devices); });
+    $('deviceSelect').addEventListener('change', event => { state.selected = event.target.value; state.alertsPrimed = false; render(state.devices); loadHistory(); });
+    function setRange(range) {
+      state.range = range;
+      document.querySelectorAll('.range-tab').forEach(tab => tab.classList.toggle('active', tab.dataset.range === range));
+    }
+    $('rangeTabs').addEventListener('click', event => {
+      const tab = event.target.closest('.range-tab'); if (!tab) return;
+      setRange(tab.dataset.range);
+      const selected = state.devices.find(device => device.id === state.selected);
+      if (selected) renderCharts(selected);
+      loadHistory();
+    });
+    // History ranges refresh once a minute (the server adds at most one point per minute).
+    setInterval(() => { if (state.range !== 'live' && !document.hidden) loadHistory(); }, 60000);
+    const ALERT_FIELDS = ['temperatureLow', 'temperatureHigh', 'humidityLow', 'humidityHigh', 'holdSeconds'];
+    function fillAlertForm() {
+      const form = $('alertForm'), settings = state.alertSettings;
+      if (!settings || form.contains(document.activeElement)) return;
+      form.enabled.checked = settings.enabled;
+      for (const key of ALERT_FIELDS) form[key].value = settings[key];
+    }
+    $('alertForm').addEventListener('submit', async event => {
+      event.preventDefault();
+      const form = event.target;
+      const body = { enabled: form.enabled.checked };
+      for (const key of ALERT_FIELDS) body[key] = Number(form[key].value);
+      try {
+        state.alertSettings = (await request('/api/alerts/settings', { method: 'POST', body: JSON.stringify(body) })).settings;
+        document.activeElement?.blur(); fillAlertForm();
+        note('Đã lưu ngưỡng cảnh báo.'); addEvent('Đã lưu ngưỡng cảnh báo', 'success');
+        const selected = state.devices.find(device => device.id === state.selected);
+        if (selected) renderCharts(selected);
+      } catch (error) { note(error.message, true); }
+    });
+    function renderNotifyButton() {
+      const button = $('notifyBtn');
+      if (!('Notification' in window)) { button.disabled = true; button.textContent = 'Trình duyệt không hỗ trợ thông báo'; return; }
+      button.disabled = Notification.permission !== 'default';
+      button.textContent = Notification.permission === 'granted' ? '🔔 Thông báo trình duyệt đã bật' :
+        Notification.permission === 'denied' ? '🔕 Thông báo bị chặn (mở lại trong cài đặt trình duyệt)' : '🔔 Bật thông báo trên trình duyệt';
+    }
+    $('notifyBtn').addEventListener('click', async () => { try { await Notification.requestPermission(); } catch { } renderNotifyButton(); });
+    renderNotifyButton();
     $('chatInput').addEventListener('input', event => { $('charCount').textContent = `${[...event.target.value].length} / 400`; });
     $('chatInput').addEventListener('keydown', event => {
       if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); $('chatForm').requestSubmit(); }
@@ -548,8 +710,9 @@
     async function loadAccountData(force = false) {
       state.adminLoaded = Date.now();
       try {
-        const [audit, rooms] = await Promise.all([request('/api/audit?limit=50'), request('/api/rooms')]);
+        const [audit, rooms, alerts] = await Promise.all([request('/api/audit?limit=50'), request('/api/rooms'), request('/api/alerts/settings')]);
         state.rooms = rooms.rooms || [];
+        state.alertSettings = alerts.settings; fillAlertForm();
         renderAudit(audit.entries || []);
         if (signedIn()) {
           state.users = (await request('/api/users')).users || [];
