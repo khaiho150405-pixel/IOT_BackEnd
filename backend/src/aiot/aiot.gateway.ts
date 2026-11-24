@@ -19,6 +19,8 @@ interface Session {
   id?: string;
   /** TCP peer: 127.0.0.1 when the device comes through the Cloudflare tunnel. */
   peer: string;
+  /** Heartbeat periods in a row without any pong or message. */
+  missed?: number;
   connectedAt: number;
   sensor?: Sensor;
   micSlot?: number;
@@ -41,6 +43,12 @@ interface Session {
   followUntil?: number;
   followTimer?: NodeJS.Timeout;
 }
+
+/** ESP-IDF esp_reset_reason_t, reported by the firmware with each sensor message. */
+const RESET_REASONS: Record<number, string> = {
+  0: 'unknown (e.g. after flashing over USB)', 1: 'power on', 2: 'external pin (RESET button)', 3: 'software restart', 4: 'crash (panic)',
+  5: 'interrupt watchdog', 6: 'task watchdog', 7: 'watchdog', 8: 'deep sleep', 9: 'brownout (power dip)', 10: 'SDIO',
+};
 
 export function authenticate(header: string | undefined, token: string): boolean {
   const supplied = Buffer.from(header || '');
@@ -95,7 +103,17 @@ ${alert.message}`);
     routeUpgrade(server, '/aiot', this.server);
     this.heartbeat = setInterval(() => {
       for (const s of this.sessions) {
-        if (!s.alive) { console.warn(`Heartbeat timeout for ${s.id || 'unknown device'}: no pong/message in 15 s`); s.ws.terminate(); continue; }
+        // Through the Cloudflare tunnel the device's link sometimes stalls for 10-20 s and then
+        // recovers; allow 3 silent periods (45 s) there, 1 (15 s) on the LAN.
+        if (!s.alive) {
+          s.missed = (s.missed ?? 0) + 1;
+          const allowed = /^(127\.|::1$|::ffff:127\.)/.test(s.peer) ? Number(process.env.TUNNEL_HEARTBEAT_MISSES || 3) : 1;
+          if (s.missed >= allowed) {
+            console.warn(`Heartbeat timeout for ${s.id || 'unknown device'}: no pong/message in ${15 * s.missed} s`);
+            s.ws.terminate(); continue;
+          }
+          console.warn(`Device ${s.id || 'unknown'} silent for ${15 * s.missed} s (tunnel); waiting`);
+        } else s.missed = 0;
         s.alive = false;
         s.ws.ping();
       }
@@ -233,7 +251,8 @@ ${alert.message}`);
       if (Number.isFinite(message.uptime_ms) && s.id) {
         const previous = this.deviceUptime.get(s.id);
         if (previous !== undefined && message.uptime_ms < previous)
-          console.warn(`Device ${s.id} rebooted (uptime ${Math.round(previous / 1000)} s -> ${Math.round(message.uptime_ms / 1000)} s)`);
+          console.warn(`Device ${s.id} rebooted (uptime ${Math.round(previous / 1000)} s -> ${Math.round(message.uptime_ms / 1000)} s` +
+            `${Number.isInteger(message.reset_reason) ? `, reason: ${RESET_REASONS[message.reset_reason] ?? message.reset_reason}` : ''})`);
         this.deviceUptime.set(s.id, message.uptime_ms);
       }
       if (Number.isInteger(message.mic_slot) && message.mic_slot !== s.micSlot) {

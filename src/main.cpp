@@ -105,6 +105,7 @@ const char *loopSlowPart = "";
 float micPeakRms = 0;     // loudest 16 ms chunk (voice band) since the last report
 uint32_t micOpenCount = 0; // voice-gate openings since the last report
 uint32_t micDropCount = 0; // audio frames dropped because the socket was full
+uint32_t sensorSkips = 0;  // sensor reports skipped because the socket was full
 // Same Wi-Fi as the laptop (not its hotspot): the backend tells the device the laptop's LAN
 // address after a public (wss) hello; the device then talks to it directly with ws:// (a few
 // ms instead of a round trip through Cloudflare and TLS). Kept until Wi-Fi reconnects.
@@ -753,6 +754,9 @@ void receiveJson(const uint8_t *data, size_t length) {
   }
   const char *type = doc["type"] | "";
   if (!strcmp(type, "lan_hint")) {
+#ifdef AIOT_FORCE_PUBLIC_LINK
+    return; // test builds stay on wss
+#endif
     const char *host = doc["host"] | "";
     const unsigned port = doc["port"] | 0u;
     IPAddress parsed;
@@ -977,7 +981,13 @@ void sendSensor() {
   doc["mic_peak_rms"] = static_cast<long>(micPeakRms);
   doc["mic_gate_opens"] = micOpenCount;
   doc["mic_drops"] = micDropCount;
-  loopMaxMs = 0; loopSlowPart = ""; micPeakRms = 0; micOpenCount = 0; micDropCount = 0;
+  doc["reset_reason"] = static_cast<int>(esp_reset_reason()); // why the board last restarted
+  // Through the Internet (wss) the link sometimes stops acknowledging for 10-20 s. A blocking
+  // write then waited WEBSOCKETS_TCP_TIMEOUT (4 s) and the library dropped the connection;
+  // a report is sent every 2 s, so skipping one while the socket is full costs nothing.
+  if (!socketClient.canWriteNow()) { ++sensorSkips; return; }
+  doc["sensor_skips"] = sensorSkips;
+  loopMaxMs = 0; loopSlowPart = ""; micPeakRms = 0; micOpenCount = 0; micDropCount = 0; sensorSkips = 0;
   String output;
   serializeJson(doc, output);
   socketClient.sendTXT(output);
@@ -1266,6 +1276,8 @@ void networkTask(void *) {
     const uint32_t now = millis(), spent = now - mark;
     mark = now;
     if (spent > loopMaxMs) { loopMaxMs = spent; loopSlowPart = part; }
+    if (spent >= 800) Serial.printf("[slow] %s %lu ms (link %s, connected %d)\n", part, static_cast<unsigned long>(spent),
+                                    backendLink == BackendLink::Public ? "wss" : "ws", connected.load());
   };
   for (;;) {
     mark = millis();
