@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { UtteranceDetector, readWav, resample, wavFromPcm } from '../src/aiot/audio';
+import { UtteranceDetector, decodeImaAdpcm, encodeImaAdpcm, readWav, resample, wavFromPcm } from '../src/aiot/audio';
 import { OledRenderer, PAGE_BYTES } from '../src/aiot/display';
 import { MusicLibrary } from '../src/aiot/music';
 import { HistoryStore } from '../src/aiot/history';
@@ -137,4 +137,30 @@ test('speaker volume scales a copy and leaves cached speech untouched', async ()
   assert.equal(quieter.readInt16LE(2), -10000);
   assert.equal(original.readInt16LE(0), 20000, 'input buffer must not be modified');
   assert.equal(applySpeakerVolume(original, 1), original);
+});
+
+test('IMA ADPCM microphone frames keep speech-band audio at a quarter of the size', () => {
+  // 256 samples (one firmware frame) of a speech-like mix, then a 1024-sample pre-roll frame.
+  for (const count of [256, 1024, 255, 2]) {
+    const pcm = Buffer.alloc(count * 2);
+    for (let i = 0; i < count; i++)
+      pcm.writeInt16LE(Math.round(6000 * Math.sin(i * 0.11) + 2500 * Math.sin(i * 0.47) + 800 * Math.sin(i * 1.3)), i * 2);
+    const { frame } = encodeImaAdpcm(pcm, 30);
+    assert.equal(frame.length, 6 + Math.ceil((count - 1) / 2));
+    assert.ok(frame.length <= pcm.length / 4 + 7, 'about 4x smaller');
+    const out = decodeImaAdpcm(frame);
+    assert.equal(out.length, pcm.length);
+    let signal = 0, noise = 0;
+    for (let i = 0; i < count; i++) {
+      const a = pcm.readInt16LE(i * 2), b = out.readInt16LE(i * 2);
+      signal += a * a; noise += (a - b) ** 2;
+    }
+    if (count > 16) assert.ok(10 * Math.log10(signal / noise) > 20, `SNR > 20 dB for ${count} samples`);
+  }
+  // Corrupt frames are refused instead of decoding garbage.
+  assert.throws(() => decodeImaAdpcm(Buffer.alloc(3)));
+  const bad = encodeImaAdpcm(Buffer.alloc(512)).frame;
+  bad[4] = 99; // step index out of range
+  assert.throws(() => decodeImaAdpcm(bad));
+  assert.throws(() => decodeImaAdpcm(encodeImaAdpcm(Buffer.alloc(512)).frame.subarray(0, 50)));
 });

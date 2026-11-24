@@ -257,7 +257,9 @@ Thay `COM6` bằng cổng thực tế (Device Manager → Ports). Nếu không v
 
 Firmware đọc cả hai kênh I2S của INMP441 và tự chọn kênh có tín hiệu; backend in `microphone slot N` khi nhận được.
 
-**Đổi Wi-Fi/IP không cần nạp lại:** giữ nút **BOOT (GPIO 0) 3 giây** (hoặc để ESP32 tự vào chế độ này khi không nối được Wi-Fi sau 25 giây). OLED hiện `CAU HINH WI-FI` và phát Wi-Fi `AIoT_Smart_Room`. Dùng điện thoại kết nối vào, trang cấu hình tự mở (hoặc vào `192.168.4.1`), chọn Wi-Fi, nhập mật khẩu và IP máy AI worker, bấm **LƯU VÀ KẾT NỐI**. Cấu hình lưu trong flash.
+**Cài Wi-Fi không cần nạp lại (khuyên dùng Wi-Fi 2.4 GHz của router nhà):** khi ESP32 không vào được máy chủ 60 giây, nó phát Wi-Fi `AIoT_Smart_Room` (OLED hiện `AP: AIoT_Smart_Room`). Dùng điện thoại kết nối vào, trang cài đặt tự mở (hoặc vào `192.168.4.1`): chạm chọn mạng **2.4 GHz** trong danh sách (router hai băng thường đặt tên 5 GHz có đuôi `_5G`, chọn tên còn lại), nhập mật khẩu, bấm **Lưu và kết nối**. IP máy chủ, cổng, mã thiết bị nằm ở mục *Nâng cao* và thường để nguyên: ngoài hotspot của laptop, ESP32 tự kết nối `wss://aiot.eduscore.id.vn`. ESP32 **nhớ tối đa 5 mạng** và tự vào mạng đã lưu có sóng mạnh nhất, nên mỗi nơi chỉ cài một lần; trang hiện lý do khi không vào được (sai mật khẩu, không thấy mạng…), không bao giờ hiện lại mật khẩu, có nút *Quên* mạng. Giữ nút **BOOT (GPIO 0) 3 giây** để xóa mọi cấu hình đã lưu.
+
+**Vì sao không nên dùng Mobile Hotspot của laptop khi laptop đang vào Wi-Fi 5 GHz:** một card Wi-Fi phải nhảy liên tục giữa 5 GHz (mạng nhà) và 2.4 GHz (hotspot cho ESP32), làm kết nối của ESP32 đứng hàng giây và rớt liên tục. Cho ESP32 vào thẳng Wi-Fi 2.4 GHz của router thì không cần hotspot nữa.
 
 ## 4. Đấu dây và nguồn điện
 

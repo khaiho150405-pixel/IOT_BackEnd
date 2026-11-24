@@ -50,7 +50,24 @@ DHT dht(DHT_PIN, DHT22);
 // 100 kHz I2C: long breadboard jumpers next to the I2S lines corrupt 400 kHz transfers.
 Adafruit_SSD1306 display(128, 64, &Wire, -1, 100000UL, 100000UL);
 CRGB leds[LED_COUNT];
-WebSocketsClient socketClient;
+// WebSocketsClient that can tell whether the socket has room for another audio frame. A full
+// lwIP send buffer made WiFiClient::write block for up to 10 s (10 retries x 1 s), freezing the
+// whole network loop; audio frames are dropped instead of waiting.
+class AiotSocket : public WebSocketsClient {
+ public:
+  bool canWriteNow() {
+    if (!_client.tcp) return false;
+    const int fd = _client.tcp->fd();
+    if (fd < 0) return true;
+    fd_set set;
+    FD_ZERO(&set);
+    FD_SET(fd, &set);
+    timeval tv = {0, 0};
+    // lwIP reports "writable" only with >= TCP_SNDLOWAT (~2.8 KB) free: a frame never blocks.
+    return select(fd + 1, nullptr, &set, nullptr, &tv) > 0 && FD_ISSET(fd, &set);
+  }
+};
+AiotSocket socketClient;
 std::atomic<bool> connected{false}, speaking{false}, ledEnabled{true};
 std::atomic<uint32_t> ledColor{0x00FF00};
 std::atomic<bool> serverBusy{false};
@@ -87,11 +104,14 @@ uint32_t loopMaxMs = 0;
 const char *loopSlowPart = "";
 float micPeakRms = 0;     // loudest 16 ms chunk (voice band) since the last report
 uint32_t micOpenCount = 0; // voice-gate openings since the last report
+uint32_t micDropCount = 0; // audio frames dropped because the socket was full
 
 void clearPlayback();
 
 Preferences preferences;
 char curSsid[64] = "";
+uint32_t portalUsedAt = 0; // last request to the setup page (pauses Wi-Fi reconnect attempts)
+volatile uint8_t lastWifiReason = 0; // why the last Wi-Fi join failed (ESP-IDF reason code)
 char curPass[64] = "";
 char curHost[64] = "";
 uint16_t curPort = WS_PORT;
@@ -156,6 +176,7 @@ void saveConfig(const char *ssid, const char *pass, const char *host, uint16_t p
 
 void handleApiStatus() {
   if (!configServer) return;
+  if (portalUsedAt) portalUsedAt = millis();
   float t = 0, h = 0; bool valid = false;
   portENTER_CRITICAL(&sensorMux);
   t = temperature; h = humidity; valid = sensorValid;
@@ -175,6 +196,13 @@ void handleApiStatus() {
   doc["reply"] = lastReply;
   doc["transcript"] = lastTranscript;
   doc["wifi"] = (WiFi.status() == WL_CONNECTED) ? WiFi.SSID() : "Cho ket noi";
+  doc["target"] = curSsid;
+  const uint8_t r = lastWifiReason;
+  // 15/202/204/210: handshake or authentication failed (almost always a wrong password);
+  // 201: network not found; 205: AP refused (often a full or MAC-filtered router).
+  doc["problem"] = (r == 15 || r == 202 || r == 204 || r == 210 || r == 2 || r == 23) ? "Sai mật khẩu Wi-Fi?" :
+                   r == 201 ? "Không thấy mạng (tắt hoặc chỉ 5 GHz?)" :
+                   r == 205 ? "Router từ chối thiết bị" : r ? "Không vào được Wi-Fi (mã lỗi " + String(r) + ")" : "";
   doc["ip"] = WiFi.localIP().toString();
   String out;
   serializeJson(doc, out);
@@ -207,199 +235,326 @@ void handleApiLed() {
   handleApiStatus();
 }
 
-void handleRoot() {
-  if (!configServer) return;
-  int n = WiFi.scanNetworks();
-  String wifiOptions = "";
-  for (int i = 0; i < n && i < 8; ++i) {
-    String name = WiFi.SSID(i);
-    if (name.length() > 0) {
-      wifiOptions += "<div class='wifi-item' onclick=\"pick('" + name + "')\">📶 " + name + "</div>";
+// ----------------------------------------------------------------------------- saved Wi-Fi networks
+// Up to 5 networks are remembered (newest first). When Wi-Fi is down the ESP32 scans and joins the
+// strongest one in range, so each place (home, laptop hotspot, lab...) is set up only once. The
+// network from include/config.h is always tried as well.
+constexpr int MAX_NETWORKS = 5;
+char knownSsid[MAX_NETWORKS][33];
+char knownPass[MAX_NETWORKS][65];
+int knownCount = 0;
+
+void loadKnownNetworks() {
+  preferences.begin("aiot_net", true);
+  knownCount = preferences.getUChar("wn", 255);
+  if (knownCount == 255) {
+    // First start with this firmware: keep the single network saved by older firmware.
+    knownCount = 0;
+    String s = preferences.getString("ssid", ""), p = preferences.getString("pass", "");
+    if (s.length() && s != WIFI_SSID) {
+      strlcpy(knownSsid[0], s.c_str(), sizeof(knownSsid[0]));
+      strlcpy(knownPass[0], p.c_str(), sizeof(knownPass[0]));
+      knownCount = 1;
+    }
+  } else {
+    knownCount = min(knownCount, MAX_NETWORKS);
+    for (int i = 0; i < knownCount; ++i) {
+      char key[4];
+      snprintf(key, sizeof(key), "s%d", i);
+      strlcpy(knownSsid[i], preferences.getString(key, "").c_str(), sizeof(knownSsid[i]));
+      snprintf(key, sizeof(key), "p%d", i);
+      strlcpy(knownPass[i], preferences.getString(key, "").c_str(), sizeof(knownPass[i]));
     }
   }
+  preferences.end();
+}
+
+void storeKnownNetworks() {
+  preferences.begin("aiot_net", false);
+  preferences.putUChar("wn", knownCount);
+  for (int i = 0; i < knownCount; ++i) {
+    char key[4];
+    snprintf(key, sizeof(key), "s%d", i);
+    preferences.putString(key, knownSsid[i]);
+    snprintf(key, sizeof(key), "p%d", i);
+    preferences.putString(key, knownPass[i]);
+  }
+  preferences.end();
+}
+
+int findKnown(const char *ssid) {
+  for (int i = 0; i < knownCount; ++i) if (!strcmp(knownSsid[i], ssid)) return i;
+  return -1;
+}
+
+// Same network if the names match once surrounding spaces are ignored.
+int findKnownLoose(const String &ssid) {
+  String wanted = ssid;
+  wanted.trim();
+  for (int i = 0; i < knownCount; ++i) {
+    String saved = knownSsid[i];
+    saved.trim();
+    if (saved == wanted) return i;
+  }
+  return -1;
+}
+
+// Adds or refreshes a network at the front of the list. An empty password for a network that is
+// already saved keeps the saved password (the setup page never shows passwords).
+void rememberNetwork(const char *ssid, const char *pass) {
+  char keepPass[65];
+  const int at = findKnown(ssid);
+  strlcpy(keepPass, (pass[0] || at < 0) ? pass : knownPass[at], sizeof(keepPass));
+  if (at >= 0) {
+    for (int i = at; i < knownCount - 1; ++i) {
+      memcpy(knownSsid[i], knownSsid[i + 1], sizeof(knownSsid[i]));
+      memcpy(knownPass[i], knownPass[i + 1], sizeof(knownPass[i]));
+    }
+    --knownCount;
+  }
+  for (int i = min(knownCount, MAX_NETWORKS - 1); i > 0; --i) {
+    memcpy(knownSsid[i], knownSsid[i - 1], sizeof(knownSsid[i]));
+    memcpy(knownPass[i], knownPass[i - 1], sizeof(knownPass[i]));
+  }
+  strlcpy(knownSsid[0], ssid, sizeof(knownSsid[0]));
+  strlcpy(knownPass[0], keepPass, sizeof(knownPass[0]));
+  knownCount = min(knownCount + 1, MAX_NETWORKS);
+  storeKnownNetworks();
+}
+
+void forgetNetwork(const char *ssid) {
+  const int at = findKnown(ssid);
+  if (at < 0) return;
+  for (int i = at; i < knownCount - 1; ++i) {
+    memcpy(knownSsid[i], knownSsid[i + 1], sizeof(knownSsid[i]));
+    memcpy(knownPass[i], knownPass[i + 1], sizeof(knownPass[i]));
+  }
+  --knownCount;
+  storeKnownNetworks();
+}
+
+// Joins the strongest saved network in range (or the config.h one). Blocks ~2 s for the scan,
+// which only happens while Wi-Fi is down.
+// While someone uses the setup page, automatic reconnect attempts pause: a station that is busy
+// connecting makes every scan fail, so the page showed "no networks".
+bool portalInUse() { return portalUsedAt && millis() - portalUsedAt < 90000; }
+
+// Scans for networks, first stopping a connection attempt in progress (ESP-IDF refuses to scan
+// meanwhile) and retrying a failed scan. Returns the number found (0 on failure).
+int scanWifi() {
+  if (WiFi.status() != WL_CONNECTED) WiFi.disconnect(false, false);
+  for (int attempt = 0; attempt < 4; ++attempt) {
+    const int found = WiFi.scanNetworks(false, true); // blocking, include hidden networks
+    if (found >= 0) {
+      Serial.printf("Wi-Fi scan: %d network(s)\n", found);
+      return found;
+    }
+    Serial.printf("Wi-Fi scan failed (%d), retrying\n", found);
+    WiFi.scanDelete();
+    delay(300);
+  }
+  return 0;
+}
+
+void connectBestNetwork() {
+  const char *ssid = WIFI_SSID, *pass = WIFI_PASSWORD;
+  if (portalInUse()) return; // let the setup page scan; it saves and restarts anyway
+  if (knownCount > 0) {
+    const int found = scanWifi();
+    int bestRssi = -1000;
+    for (int n = 0; n < found; ++n) {
+      const String name = WiFi.SSID(n);
+      const int at = findKnownLoose(name);
+      const bool builtin = name == WIFI_SSID;
+      if ((at >= 0 || builtin) && WiFi.RSSI(n) > bestRssi) {
+        bestRssi = WiFi.RSSI(n);
+        if (at >= 0 && name != knownSsid[at] && name.length() < sizeof(knownSsid[at])) {
+          Serial.printf("Wi-Fi: saved name \"%s\" repaired to \"%s\"\n", knownSsid[at], name.c_str());
+          strlcpy(knownSsid[at], name.c_str(), sizeof(knownSsid[at]));
+          storeKnownNetworks();
+        }
+        ssid = at >= 0 ? knownSsid[at] : WIFI_SSID;
+        pass = at >= 0 ? knownPass[at] : WIFI_PASSWORD;
+      }
+    }
+    if (bestRssi == -1000) {
+      // None of the saved names is in range: log what is, quoted, so a name that differs only by
+      // spaces or letter case is easy to spot.
+      for (int n = 0; n < found && n < 12; ++n) Serial.printf("  seen [%s] %d dBm\n", WiFi.SSID(n).c_str(), WiFi.RSSI(n));
+      ssid = knownSsid[0]; pass = knownPass[0]; // try the newest anyway
+    }
+    WiFi.scanDelete();
+  }
+  strlcpy(curSsid, ssid, sizeof(curSsid));
+  strlcpy(curPass, pass, sizeof(curPass));
+  Serial.printf("Wi-Fi: joining \"%s\"\n", curSsid);
+  WiFi.begin(curSsid, curPass);
+}
+
+String htmlEscape(const String &text) {
+  String out;
+  out.reserve(text.length() + 8);
+  for (size_t i = 0; i < text.length(); ++i) {
+    const char c = text[i];
+    if (c == '&') out += "&amp;";
+    else if (c == '<') out += "&lt;";
+    else if (c == '>') out += "&gt;";
+    else if (c == '"') out += "&quot;";
+    else if (c == '\'') out += "&#39;";
+    else out += c;
+  }
+  return out;
+}
+
+void handleRoot() {
+  if (!configServer) return;
+  portalUsedAt = millis();
+  // Nearby networks, strongest first, without duplicates (one entry per name).
+  const int found = scanWifi();
+  String nearby, seen = "\n";
+  for (int n = 0; n < found; ++n) {
+    int best = -1;
+    for (int k = 0; k < found; ++k) {
+      const String name = WiFi.SSID(k);
+      if (!name.length() || seen.indexOf("\n" + name + "\n") >= 0) continue;
+      if (best < 0 || WiFi.RSSI(k) > WiFi.RSSI(best)) best = k;
+    }
+    if (best < 0 || nearby.length() > 3500) break;
+    const String name = WiFi.SSID(best);
+    seen += name + "\n";
+    const int rssi = WiFi.RSSI(best);
+    const int bars = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : 1;
+    const bool open = WiFi.encryptionType(best) == WIFI_AUTH_OPEN;
+    const bool saved = findKnownLoose(name) >= 0 || name == WIFI_SSID;
+    const String safe = htmlEscape(name);
+    nearby += "<button type='button' class='net' data-ssid='" + safe + "' data-open='" + String(open ? 1 : 0) +
+              "' data-saved='" + String(saved ? 1 : 0) + "'><span class='bars b" + String(bars) +
+              "'><i></i><i></i><i></i><i></i></span><span class='nm'>" + safe + "</span>" +
+              (saved ? "<span class='tag'>Đã lưu</span>" : "") + (open ? "" : "<span class='lock'>🔒</span>") +
+              "</button>";
+  }
+  WiFi.scanDelete();
+  if (!nearby.length()) nearby = "<p class='muted'>Không thấy mạng nào. Nhấn Quét lại.</p>";
+
+  String savedList;
+  for (int i = 0; i < knownCount; ++i) {
+    const String safe = htmlEscape(knownSsid[i]);
+    savedList += "<li><span>" + safe + "</span><form method='POST' action='/forget'><input type='hidden' name='ssid' value='" +
+                 safe + "'><button class='link'>Quên</button></form></li>";
+  }
+  if (!savedList.length()) savedList = "<li class='muted'>Chưa lưu mạng nào.</li>";
 
   String html = R"rawliteral(<!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>AIoT Smart Room - Màn hình Báo cáo</title>
+<html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>AIoT Smart Room - Cài đặt Wi-Fi</title>
 <style>
-:root{--bg:#090d16;--card:rgba(22,29,47,0.85);--border:rgba(255,255,255,0.08);--accent:#38bdf8;--text:#f8fafc;--muted:#94a3b8}
-*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-body{background:var(--bg);color:var(--text);padding:14px;display:flex;justify-content:center;min-height:100vh}
-.container{width:100%;max-width:440px;display:flex;flex-direction:column;gap:14px}
-.header{display:flex;align-items:center;justify-content:space-between;padding:4px 2px}
-.header h1{font-size:1.15rem;font-weight:700;color:#38bdf8;display:flex;align-items:center;gap:8px}
-.pill{font-size:0.75rem;padding:4px 10px;border-radius:20px;font-weight:600}
-.pill-on{background:rgba(16,185,129,0.15);color:#34d399;border:1px solid rgba(16,185,129,0.3)}
-.pill-wait{background:rgba(245,158,11,0.15);color:#fbbf24;border:1px solid rgba(245,158,11,0.3)}
-.card{background:var(--card);backdrop-filter:blur(12px);border:1px solid var(--border);border-radius:18px;padding:16px;box-shadow:0 8px 24px rgba(0,0,0,0.3)}
-.card-title{font-size:0.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;font-weight:600}
-.sensor-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.sensor-box{background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:14px;padding:14px 10px;text-align:center}
-.sensor-label{font-size:0.78rem;color:var(--muted);margin-bottom:4px}
-.sensor-num{font-size:2rem;font-weight:800;letter-spacing:-0.5px}
-.sensor-num.temp{color:#fb923c}
-.sensor-num.humid{color:#38bdf8}
+:root{--bg:#0b1120;--card:#141c2f;--line:#26324a;--accent:#38bdf8;--text:#f1f5f9;--muted:#94a3b8;--ok:#34d399;--warn:#fbbf24}
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,"Segoe UI",Roboto,sans-serif}
+html,body{background:var(--bg);color:var(--text)}
+body{padding:16px 16px calc(40vh + env(safe-area-inset-bottom));line-height:1.45}
+main{max-width:460px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+h1{font-size:1.15rem;color:var(--accent)}
+.sub{font-size:.85rem;color:var(--muted)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+.card h2{font-size:.95rem;margin-bottom:10px}
+.row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+.pill{font-size:.75rem;padding:4px 10px;border-radius:20px;font-weight:600;white-space:nowrap}
+.on{background:rgba(52,211,153,.15);color:var(--ok)}.wait{background:rgba(251,191,36,.15);color:var(--warn)}
+.nets{display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;margin-bottom:12px}
+.net{display:flex;align-items:center;gap:10px;width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:#0f172a;color:var(--text);font-size:.95rem;text-align:left;cursor:pointer}
+.net.sel{border-color:var(--accent);background:#0c2536}
+.nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tag{font-size:.7rem;color:var(--ok);border:1px solid var(--ok);border-radius:6px;padding:1px 6px}
+.bars{display:inline-flex;align-items:flex-end;gap:2px;height:14px}
+.bars i{width:3px;background:#334155;border-radius:1px}.bars i:nth-child(1){height:4px}.bars i:nth-child(2){height:7px}.bars i:nth-child(3){height:10px}.bars i:nth-child(4){height:14px}
+.b1 i:nth-child(-n+1),.b2 i:nth-child(-n+2),.b3 i:nth-child(-n+3),.b4 i:nth-child(-n+4){background:var(--accent)}
+label{display:block;font-size:.8rem;color:var(--muted);margin:10px 0 4px}
+input{width:100%;padding:12px;border-radius:10px;border:1px solid var(--line);background:#0f172a;color:var(--text);font-size:16px}
+.pw{position:relative}.pw button{position:absolute;right:6px;top:6px;padding:6px 10px;border:0;border-radius:8px;background:#1e293b;color:var(--muted);font-size:.8rem}
+.btn{width:100%;margin-top:14px;padding:13px;border:0;border-radius:12px;background:linear-gradient(135deg,#0284c7,#2563eb);color:#fff;font-size:1rem;font-weight:600}
+.btn2{padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--accent);font-size:.85rem}
+details{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+summary{cursor:pointer;color:var(--accent);font-size:.88rem}
+.muted{color:var(--muted);font-size:.85rem}
+.hint{font-size:.8rem;color:var(--muted);margin-top:6px}
+ul{list-style:none}li{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid var(--line)}
+li form{margin:0}.link{background:none;border:0;color:#f87171;font-size:.85rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;text-align:center}
+.big{font-size:1.6rem;font-weight:700}
+</style></head><body><main>
+<div class="row"><div><h1>🏠 AIoT Smart Room</h1><div class="sub">Cài đặt Wi-Fi cho thiết bị</div></div>
+<span id="conn" class="pill wait">Đang kiểm tra…</span></div>
 
-/* Lamp Illustration */
-.lamp-wrap{display:flex;flex-direction:column;align-items:center;padding:10px 0;cursor:pointer;position:relative}
-.lamp-glow{position:absolute;width:130px;height:130px;top:10px;border-radius:50%;filter:blur(22px);opacity:0;transition:all 0.4s ease;pointer-events:none}
-.lamp-svg{width:80px;height:80px;z-index:2;transition:transform 0.2s}
-.lamp-wrap:active .lamp-svg{transform:scale(0.94)}
-.lamp-status{font-size:1.05rem;font-weight:700;margin-top:10px;z-index:2;letter-spacing:0.5px}
-.lamp-hint{font-size:0.72rem;color:var(--muted);margin-top:4px;z-index:2}
-
-/* System Result Box */
-.res-box{display:flex;flex-direction:column;gap:8px;font-size:0.85rem}
-.res-item{background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:12px;padding:10px 12px}
-.res-title{font-size:0.72rem;color:var(--muted);margin-bottom:2px}
-.res-val{color:#f1f5f9;font-weight:500;line-height:1.4}
-
-/* Collapsible Wi-Fi */
-details{background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:14px;overflow:hidden}
-summary{padding:12px 14px;font-size:0.82rem;font-weight:600;cursor:pointer;color:#38bdf8;outline:none}
-.wifi-form{padding:0 14px 14px;display:flex;flex-direction:column;gap:10px}
-.wifi-list{max-height:90px;overflow-y:auto;border:1px solid #334155;border-radius:8px;background:#1e293b;padding:4px}
-.wifi-item{padding:6px 8px;border-radius:6px;cursor:pointer;font-size:12px}
-.wifi-item:hover{background:#334155;color:#38bdf8}
-.wifi-form input{width:100%;padding:9px 12px;background:#1e293b;border:1px solid #334155;border-radius:8px;color:#fff;font-size:13px}
-.btn-save{padding:10px;background:linear-gradient(135deg,#0284c7,#2563eb);color:#fff;border:none;border-radius:10px;font-weight:600;cursor:pointer;font-size:13px}
-</style>
-</head>
-<body>
-<div class="container">
-  <div class="header">
-    <h1>🏠 AIoT Smart Room</h1>
-    <div id="connPill" class="pill pill-wait">🟡 Đang kết nối AI...</div>
-  </div>
-
-  <!-- CẢM BIẾN MÔI TRƯỜNG -->
-  <div class="card">
-    <div class="card-title">Cảm biến nhiệt độ & độ ẩm phòng</div>
-    <div class="sensor-grid">
-      <div class="sensor-box">
-        <div class="sensor-label">Nhiệt độ phòng 🌡️</div>
-        <div class="sensor-num temp"><span id="temp">--.-</span>°C</div>
-      </div>
-      <div class="sensor-box">
-        <div class="sensor-label">Độ ẩm không khí 💧</div>
-        <div class="sensor-num humid"><span id="humid">--</span>%</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- MINH HỌA TRẠNG THÁI ĐÈN -->
-  <div class="card">
-    <div class="card-title">Minh họa trạng thái đèn thông minh</div>
-    <div class="lamp-wrap" onclick="toggleLamp()">
-      <div id="lampGlow" class="lamp-glow"></div>
-      <svg id="lampSvg" class="lamp-svg" viewBox="0 0 24 24">
-        <path id="lampBulb" d="M12 2a7 7 0 0 0-7 7c0 2.38 1.19 4.47 3 5.74V17a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-2.26c1.81-1.27 3-3.36 3-5.74a7 7 0 0 0-7-7z" fill="#334155" stroke="#64748b" stroke-width="1.5"/>
-        <path d="M9 10l2 2 2-2" stroke="#94a3b8" stroke-width="1.5" stroke-linecap="round"/>
-        <line x1="9" y1="21" x2="15" y2="21" stroke="#64748b" stroke-width="1.5" stroke-linecap="round"/>
-      </svg>
-      <div id="lampStatus" class="lamp-status">🌑 ĐÈN ĐANG TẮT</div>
-      <div class="lamp-hint">Chạm vào bóng đèn để bật / tắt</div>
-    </div>
-  </div>
-
-  <!-- KẾT QUẢ PHẢN HỒI HỆ THỐNG -->
-  <div class="card">
-    <div class="card-title">Kết quả phản hồi từ hệ thống</div>
-    <div class="res-box">
-      <div class="res-item">
-        <div class="res-title">🗣️ Khẩu lệnh nhận diện:</div>
-        <div id="userText" class="res-val">Chưa có khẩu lệnh</div>
-      </div>
-      <div class="res-item">
-        <div class="res-title">🤖 Trả lời / Xử lý:</div>
-        <div id="aiReply" class="res-val">Em chào đại ca! Sẵn sàng phục vụ.</div>
-      </div>
-    </div>
-  </div>
-
-  <!-- CÀI ĐẶT WI-FI (THU GỌN) -->
-  <details>
-    <summary>⚙️ Cài đặt mạng Wi-Fi khác (Tùy chọn)</summary>
-    <form class="wifi-form" method="POST" action="/save">
-      <div class="wifi-list">)rawliteral";
-
-  html += wifiOptions;
-
+<div class="card">
+<h2>1. Chọn mạng Wi-Fi</h2>
+<p class="hint" style="margin:-4px 0 10px">Thiết bị chỉ dùng được Wi-Fi 2.4 GHz. Nếu router có hai tên (ví dụ "Nhà" và "Nhà_5G"), chọn tên không có 5G.</p>
+<div class="nets" id="nets">)rawliteral";
+  html += nearby;
   html += R"rawliteral(</div>
-      <input type="text" id="ssid" name="ssid" placeholder="Tên Wi-Fi (SSID)" value=")rawliteral";
-  html += curSsid;
-  html += R"rawliteral(" required>
-      <input type="text" id="pass" name="pass" placeholder="Mật khẩu Wi-Fi" value=")rawliteral";
-  html += curPass;
+<div class="row"><span class="muted">Không thấy mạng của bạn?</span><a class="btn2" href="/">Quét lại</a></div>
+<form method="POST" action="/save" id="f">
+<label for="ssid">2. Tên Wi-Fi</label>
+<input id="ssid" name="ssid" required maxlength="32" autocomplete="off" autocapitalize="none" placeholder="Chạm vào một mạng ở trên">
+<label for="pass">3. Mật khẩu Wi-Fi</label>
+<div class="pw"><input id="pass" name="pass" type="password" maxlength="63" autocomplete="off" placeholder="Mật khẩu"><button type="button" id="eye">Hiện</button></div>
+<p class="hint" id="passHint"></p>
+<details><summary>Nâng cao (thường không cần đổi)</summary>
+<p class="hint">Thiết bị tự tìm máy chủ qua Internet tại <b>aiot.eduscore.id.vn</b>. Địa chỉ IP chỉ dùng khi thiết bị vào hotspot của laptop (tự đặt 192.168.137.1).</p>
+<label for="host">IP máy chủ trong mạng nội bộ</label>
+<input id="host" name="host" maxlength="63" value=")rawliteral";
+  html += htmlEscape(curHost);
   html += R"rawliteral(">
-      <input type="text" id="host" name="host" placeholder="IP Laptop (Để trống = 192.168.137.1)" value=")rawliteral";
-  html += curHost;
+<label for="port">Cổng</label>
+<input id="port" name="port" inputmode="numeric" maxlength="5" value=")rawliteral";
+  html += String(curPort);
   html += R"rawliteral(">
-      <input type="password" id="token" name="token" autocomplete="off" placeholder="Token thiết bị = DEVICE_TOKEN (trống = giữ nguyên, đang lưu )rawliteral";
-  html += String(strlen(curToken));
-  html += R"rawliteral( ký tự)">
-      <button type="submit" class="btn-save">💾 Lưu & Kết nối lại</button>
-    </form>
-  </details>
+<label for="token">Mã thiết bị (DEVICE_TOKEN)</label>
+<input id="token" name="token" type="password" autocomplete="off" placeholder="Để trống = giữ mã đang lưu">
+</details>
+<button class="btn" type="submit">💾 Lưu và kết nối</button>
+</form>
 </div>
 
+<div class="card"><h2>Mạng đã lưu</h2>
+<p class="hint" style="margin:-4px 0 6px">Thiết bị tự vào mạng đã lưu có sóng mạnh nhất, không cần cài lại khi đổi nơi.</p>
+<ul>)rawliteral";
+  html += savedList;
+  html += R"rawliteral(</ul></div>
+
+<div class="card"><h2>Trạng thái phòng</h2>
+<div class="grid"><div><div class="muted">Nhiệt độ</div><div class="big"><span id="t">--.-</span>°C</div></div>
+<div><div class="muted">Độ ẩm</div><div class="big"><span id="h">--</span>%</div></div></div>
+<button class="btn2" style="width:100%;margin-top:12px" id="lamp" type="button">Đèn: --</button>
+</div>
+</main>
 <script>
-function pick(n){document.getElementById('ssid').value=n;document.getElementById('pass').focus();}
-async function updateStatus(){
-  try{
-    const r=await fetch('/api/status');
-    const d=await r.json();
-    document.getElementById('temp').textContent=d.temp;
-    document.getElementById('humid').textContent=d.humid;
-    
-    const bulb=document.getElementById('lampBulb');
-    const glow=document.getElementById('lampGlow');
-    const txt=document.getElementById('lampStatus');
-    if(d.led){
-      const c=d.color||'#38bdf8';
-      bulb.setAttribute('fill',c);
-      bulb.setAttribute('stroke',c);
-      glow.style.background='radial-gradient(circle, '+c+'aa 0%, transparent 70%)';
-      glow.style.opacity='1';
-      txt.textContent='💡 ĐÈN ĐANG BẬT';
-      txt.style.color='#4ade80';
-    }else{
-      bulb.setAttribute('fill','#1e293b');
-      bulb.setAttribute('stroke','#475569');
-      glow.style.opacity='0';
-      txt.textContent='🌑 ĐÈN ĐANG TẮT';
-      txt.style.color='#94a3b8';
-    }
-
-    if(d.transcript) document.getElementById('userText').textContent=d.transcript;
-    if(d.reply) document.getElementById('aiReply').textContent=d.reply;
-
-    const pill=document.getElementById('connPill');
-    if(d.connected){
-      pill.textContent='🟢 Đã kết nối AI';
-      pill.className='pill pill-on';
-    }else{
-      pill.textContent='🟡 Chờ kết nối máy tính';
-      pill.className='pill pill-wait';
-    }
-  }catch(e){}
-}
-async function toggleLamp(){
-  try{
-    await fetch('/api/led?toggle=1',{method:'POST'});
-    updateStatus();
-  }catch(e){}
-}
-setInterval(updateStatus,1500);
-updateStatus();
-</script>
-</body>
-</html>)rawliteral";
+const ssid=document.getElementById('ssid'),pass=document.getElementById('pass'),hint=document.getElementById('passHint');
+document.querySelectorAll('.net').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.net').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');
+  ssid.value=b.dataset.ssid;
+  hint.textContent=b.dataset.open==='1'?'Mạng mở, không cần mật khẩu.':b.dataset.saved==='1'?'Mạng đã lưu: để trống để giữ mật khẩu cũ.':'';
+  if(b.dataset.open!=='1'){pass.focus();}
+  setTimeout(()=>pass.scrollIntoView({block:'center',behavior:'smooth'}),250);
+}));
+['ssid','pass','host','port','token'].forEach(id=>{const e=document.getElementById(id);e.addEventListener('focus',()=>setTimeout(()=>e.scrollIntoView({block:'center',behavior:'smooth'}),300));});
+document.getElementById('eye').addEventListener('click',e=>{const s=pass.type==='password';pass.type=s?'text':'password';e.target.textContent=s?'Ẩn':'Hiện';});
+async function st(){try{const d=await(await fetch('/api/status')).json();
+document.getElementById('t').textContent=d.temp;document.getElementById('h').textContent=d.humid;
+document.getElementById('lamp').textContent=d.led?'💡 Đèn đang bật – chạm để tắt':'🌑 Đèn đang tắt – chạm để bật';
+const c=document.getElementById('conn');c.textContent=d.connected?'Đã kết nối máy chủ':(d.wifi&&d.wifi!=='Cho ket noi'?'Đã vào Wi-Fi '+d.wifi:(d.problem?d.target+': '+d.problem:'Chưa vào Wi-Fi'));c.className='pill '+(d.connected?'on':'wait');}catch(e){}}
+document.getElementById('lamp').addEventListener('click',async()=>{try{await fetch('/api/led?toggle=1',{method:'POST'});st();}catch(e){}});
+setInterval(st,2000);st();
+</script></body></html>)rawliteral";
 
   configServer->send(200, "text/html", html);
+}
+
+void handleForget() {
+  if (!configServer) return;
+  forgetNetwork(configServer->arg("ssid").c_str());
+  configServer->sendHeader("Location", "/");
+  configServer->send(303, "text/plain", "");
 }
 
 void handleSave() {
@@ -409,10 +564,13 @@ void handleSave() {
   String host = configServer->arg("host");
   String portStr = configServer->arg("port");
   uint16_t port = portStr.toInt();
-  if (port == 0 || port > 65535) port = 3000;
+  if (port == 0 || port > 65535) port = WS_PORT;
   if (host.length() == 0) host = "192.168.137.1";
+  // No trim(): a network name may legitimately start or end with spaces (e.g. "Si Khai ").
+  if (!ssid.length() || ssid.length() > 32) { configServer->send(400, "text/plain", "Thieu ten Wi-Fi"); return; }
 
-  saveConfig(ssid.c_str(), pass.c_str(), host.c_str(), port);
+  rememberNetwork(ssid.c_str(), pass.c_str());
+  saveConfig(knownSsid[0], knownPass[0], host.c_str(), port);
   String token = configServer->arg("token");
   token.trim();
   if (token.length() >= 24 && token.length() < sizeof(curToken)) saveToken(token.c_str());
@@ -456,6 +614,7 @@ void startPortal() {
     configServer->on("/api/status", HTTP_GET, handleApiStatus);
     configServer->on("/api/led", HTTP_POST, handleApiLed);
     configServer->on("/save", HTTP_POST, handleSave);
+    configServer->on("/forget", HTTP_POST, handleForget);
     configServer->on("/hotspot-detect.html", HTTP_GET, handleRoot);
     configServer->on("/generate_204", HTTP_GET, handleRoot);
     configServer->on("/ncsi.txt", HTTP_GET, handleRoot);
@@ -709,7 +868,7 @@ void onSocketEvent(WStype_t type, uint8_t *payload, size_t length) {
       Serial.println("WebSocket connected");
       String hello = "{\"type\":\"hello\",\"device_id\":\"" + WiFi.macAddress() +
           "\",\"audio\":{\"format\":\"pcm_s16le\",\"sample_rate\":16000,\"channels\":1},"
-          "\"max_audio_chunk_bytes\":4096,\"led_enabled\":";
+          "\"max_audio_chunk_bytes\":4096,\"mic_codec\":\"ima_adpcm\",\"led_enabled\":";
       hello += ledEnabled.load() ? "true" : "false";
       hello += "}";
       socketClient.sendTXT(hello);
@@ -798,7 +957,8 @@ void sendSensor() {
   doc["rssi"] = WiFi.RSSI();
   doc["mic_peak_rms"] = static_cast<long>(micPeakRms);
   doc["mic_gate_opens"] = micOpenCount;
-  loopMaxMs = 0; loopSlowPart = ""; micPeakRms = 0; micOpenCount = 0;
+  doc["mic_drops"] = micDropCount;
+  loopMaxMs = 0; loopSlowPart = ""; micPeakRms = 0; micOpenCount = 0; micDropCount = 0;
   String output;
   serializeJson(doc, output);
   socketClient.sendTXT(output);
@@ -838,14 +998,61 @@ size_t readMic(const int32_t *frames, size_t count, int16_t *out) {
   return count;
 }
 
+// IMA ADPCM, 4 bits per sample: the microphone uplink drops from 32 KB/s to ~8 KB/s, which the
+// laptop hotspot carries without filling the socket. Every frame stands alone (header holds the
+// first sample and the step index), so a dropped frame only loses 16 ms of audio.
+// Frame: uint16 sampleCount, int16 firstSample, uint8 stepIndex, uint8 0, then 4-bit codes for
+// samples 1..n-1, low nibble first.
+const int16_t ADPCM_STEP[89] = {7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+  50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371,
+  408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+  2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493,
+  10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767};
+const int8_t ADPCM_INDEX[16] = {-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8};
+int adpcmIndex = 0; // carried across frames for quality; each header repeats it
+
+size_t encodeAdpcm(const int16_t *pcm, size_t count, uint8_t *out) {
+  int predictor = pcm[0], index = adpcmIndex;
+  out[0] = count & 0xFF; out[1] = count >> 8;
+  out[2] = predictor & 0xFF; out[3] = (predictor >> 8) & 0xFF;
+  out[4] = static_cast<uint8_t>(index); out[5] = 0;
+  size_t pos = 6;
+  for (size_t i = 1; i < count; ++i) {
+    int step = ADPCM_STEP[index], diff = pcm[i] - predictor, code = 0;
+    if (diff < 0) { code = 8; diff = -diff; }
+    int delta = step >> 3;
+    if (diff >= step) { code |= 4; diff -= step; delta += step; }
+    if (diff >= (step >> 1)) { code |= 2; diff -= step >> 1; delta += step >> 1; }
+    if (diff >= (step >> 2)) { code |= 1; delta += step >> 2; }
+    predictor += (code & 8) ? -delta : delta;
+    predictor = constrain(predictor, -32768, 32767);
+    index = constrain(index + ADPCM_INDEX[code], 0, 88);
+    if (i & 1) out[pos] = code; else out[pos++] |= code << 4;
+  }
+  if (count > 1 && ((count - 1) & 1)) ++pos;
+  adpcmIndex = index;
+  return pos;
+}
+
+// Sends microphone samples (at most 1024 per frame) or drops them when the socket is full.
+void sendMic(const int16_t *pcm, size_t count) {
+  static uint8_t frame[6 + 1024 / 2 + 1];
+  while (count) {
+    const size_t n = min(count, size_t(1024));
+    if (socketClient.canWriteNow()) socketClient.sendBIN(frame, encodeAdpcm(pcm, n, frame));
+    else ++micDropCount;
+    pcm += n; count -= n;
+  }
+}
+
 // Voice gate. Streaming the microphone non-stop (32 KB/s) kept the small lwIP send buffer
 // full: a blocked socket write then froze this whole loop for up to 10 s (WiFiClient retries
 // 10 x 1 s), so LED ACKs, sensor reports and heartbeats were late and commands timed out.
 // Audio is now sent only around speech: a short pre-roll (the first syllable), the speech,
 // and a hangover of silence longer than the backend's VAD_SILENCE_MS so it can close the turn.
-// The gate opens at 2.5x the room's noise floor (learnt while quiet), kept within 80..150:
-// quiet room ~45, speech ~1000 at 30 cm and ~200 at 1 m.
-constexpr float MIC_GATE_MIN = 80, MIC_GATE_MAX = 150;
+// The gate opens at 3x the room's noise floor (learnt while quiet), kept within 120..220:
+// quiet room ~45 with bursts of 130-290, speech ~1000 at 30 cm and ~200-300 at 1 m.
+constexpr float MIC_GATE_MIN = 120, MIC_GATE_MAX = 220;
 float micNoiseFloor = 45;
 constexpr size_t PREROLL_SAMPLES = SAMPLE_RATE * 3 / 10;
 constexpr uint32_t GATE_HANGOVER_MS = 2000;
@@ -882,7 +1089,7 @@ void flushPreroll() {
   while (prerollCount) {
     const size_t n = min(prerollCount, sizeof(chunk) / sizeof(chunk[0]));
     for (size_t i = 0; i < n; ++i) { chunk[i] = preroll[index]; index = (index + 1) % PREROLL_SAMPLES; }
-    socketClient.sendBIN(reinterpret_cast<uint8_t *>(chunk), n * sizeof(int16_t));
+    sendMic(chunk, n);
     prerollCount -= n;
   }
 }
@@ -998,7 +1205,14 @@ void networkTask(void *) {
 
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
-  WiFi.begin(curSsid, curPass);
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    lastWifiReason = info.wifi_sta_disconnected.reason;
+    Serial.printf("Wi-Fi refused \"%s\": reason %u\n",
+                  reinterpret_cast<const char *>(info.wifi_sta_disconnected.ssid), lastWifiReason);
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t) { lastWifiReason = 0; }, ARDUINO_EVENT_WIFI_STA_GOT_IP);
+  loadKnownNetworks();
+  connectBestNetwork();
   // Full 20 dBm transmit power on these ESP32-S3 boards, a metre from the hotspot, produced
   // distorted uplink frames and retransmissions (ping up to 130 ms at -21 dBm RSSI, socket
   // writes blocked for seconds). 11 dBm is plenty for a room and gives a clean uplink.
@@ -1085,10 +1299,9 @@ void networkTask(void *) {
         connected = false;
         clearPlayback();
       }
-      if (millis() - lastWifiAttempt >= 8000) {
+      if (millis() - lastWifiAttempt >= 15000) {
         lastWifiAttempt = millis();
-        Serial.println("Reconnecting WiFi...");
-        WiFi.reconnect();
+        connectBestNetwork(); // the strongest saved network in range, e.g. after moving the device
       }
     }
     hadWifi = wifiReady;
@@ -1110,6 +1323,8 @@ void networkTask(void *) {
       Serial.println("BOOT held 3s -> Reset config to default & restart");
       saveConfig(WIFI_SSID, WIFI_PASSWORD, WS_HOST, WS_PORT);
       clearSavedToken();
+      knownCount = 0;
+      storeKnownNetworks();
       delay(500);
       ESP.restart();
     }
@@ -1132,12 +1347,12 @@ void networkTask(void *) {
         if (level > micPeakRms) micPeakRms = level;
         micLevel = static_cast<int>(level);
         if (!gateOpen && level < micNoiseFloor * 2) micNoiseFloor = micNoiseFloor * 0.995f + level * 0.005f;
-        if (level >= constrain(micNoiseFloor * 2.5f, MIC_GATE_MIN, MIC_GATE_MAX)) {
+        if (level >= constrain(micNoiseFloor * 3.0f, MIC_GATE_MIN, MIC_GATE_MAX)) {
           if (!gateOpen) { gateOpen = true; ++micOpenCount; flushPreroll(); }
           gateCloseAt = millis() + GATE_HANGOVER_MS;
         }
         if (gateOpen) {
-          socketClient.sendBIN(reinterpret_cast<uint8_t *>(pcm), count * sizeof(int16_t));
+          sendMic(pcm, count);
           if (static_cast<int32_t>(millis() - gateCloseAt) > 0) gateOpen = false;
           micCapturing = gateOpen;
         } else {

@@ -5,7 +5,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { WebSocket, WebSocketServer, RawData } from 'ws';
 import { AiotService, Sensor, DecisionValue } from './aiot.service';
 import { HistoryStore } from './history';
-import { applySpeakerVolume, HighPassFilter, UtteranceDetector } from './audio';
+import { applySpeakerVolume, decodeImaAdpcm, HighPassFilter, UtteranceDetector } from './audio';
 import { OledRenderer } from './display';
 import { MusicLibrary } from './music';
 import { AiotMqttService } from './mqtt.service';
@@ -18,6 +18,8 @@ interface Session {
   connectedAt: number;
   sensor?: Sensor;
   micSlot?: number;
+  /** Microphone uplink codec announced in hello: raw PCM16 (older firmware) or IMA ADPCM. */
+  micCodec?: 'pcm' | 'ima_adpcm';
   ledEnabled?: boolean;
   detector: UtteranceDetector;
   highPass: HighPassFilter;
@@ -154,9 +156,11 @@ export class AiotGateway implements OnModuleDestroy {
     s.rateBytes += data.length;
     if (s.rateBytes > 96000 || (!binary && ++s.textCount > 64)) throw new Error('Rate limit');
     if (binary) {
-      if (!s.id || !data.length || data.length % 2 || data.length > 4096) throw new Error('Invalid PCM');
+      if (!s.id || !data.length || data.length > 4096) throw new Error('Invalid PCM');
+      const pcm = s.micCodec === 'ima_adpcm' ? decodeImaAdpcm(data) : data;
+      if (pcm.length % 2) throw new Error('Invalid PCM');
       if (s.busy) return;
-      const filtered = s.highPass.process(data);
+      const filtered = s.highPass.process(pcm);
       if (process.env.MIC_DEBUG === '1') this.logMicLevel(s, filtered);
       const utterance = s.detector.push(filtered);
       if (utterance) {
@@ -196,6 +200,7 @@ export class AiotGateway implements OnModuleDestroy {
         }
       }
       s.id = message.device_id;
+      s.micCodec = message.mic_codec === 'ima_adpcm' ? 'ima_adpcm' : 'pcm';
       // Do not guess after a backend/device reconnect. New firmware reports its
       // logical LED state in hello; older firmware remains unknown until an ACK.
       s.ledEnabled = typeof message.led_enabled === 'boolean' ? message.led_enabled : undefined;
@@ -224,7 +229,7 @@ export class AiotGateway implements OnModuleDestroy {
       // A slow firmware network loop delays LED acks, sensor reports and heartbeats.
       if (Number.isFinite(message.loop_max_ms) &&
           (message.loop_max_ms >= 300 || process.env.DEVICE_DEBUG === '1'))
-        console.warn(`Device ${s.id} loop ${message.loop_max_ms} ms (slowest: ${message.loop_slow || '?'}, rssi ${message.rssi} dBm, mic peak ${message.mic_peak_rms ?? '?'}, gate opens ${message.mic_gate_opens ?? '?'})`);
+        console.warn(`Device ${s.id} loop ${message.loop_max_ms} ms (slowest: ${message.loop_slow || '?'}, rssi ${message.rssi} dBm, mic peak ${message.mic_peak_rms ?? '?'}, gate opens ${message.mic_gate_opens ?? '?'}, dropped ${message.mic_drops ?? '?'})`);
       const { temperature: t, humidity: h } = message;
       s.sensor = message.valid === true && Number.isFinite(t) && Number.isFinite(h) &&
         t >= -40 && t <= 80 && h >= 0 && h <= 100 ? { temperature: t, humidity: h, receivedAt: Date.now() } : undefined;

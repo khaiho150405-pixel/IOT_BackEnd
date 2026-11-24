@@ -141,3 +141,61 @@ export class UtteranceDetector {
     }
   }
 }
+
+const ADPCM_STEP = [7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 19, 21, 23, 25, 28, 31, 34, 37, 41, 45,
+  50, 55, 60, 66, 73, 80, 88, 97, 107, 118, 130, 143, 157, 173, 190, 209, 230, 253, 279, 307, 337, 371,
+  408, 449, 494, 544, 598, 658, 724, 796, 876, 963, 1060, 1166, 1282, 1411, 1552, 1707, 1878, 2066,
+  2272, 2499, 2749, 3024, 3327, 3660, 4026, 4428, 4871, 5358, 5894, 6484, 7132, 7845, 8630, 9493,
+  10442, 11487, 12635, 13899, 15289, 16818, 18500, 20350, 22385, 24623, 27086, 29794, 32767];
+const ADPCM_INDEX = [-1, -1, -1, -1, 2, 4, 6, 8, -1, -1, -1, -1, 2, 4, 6, 8];
+
+/**
+ * Decodes one microphone frame of the firmware's IMA ADPCM uplink (4 bits per sample, ~8 KB/s
+ * instead of 32 KB/s of PCM16). Frame: uint16 sampleCount, int16 firstSample, uint8 stepIndex,
+ * uint8 reserved, then 4-bit codes for samples 1..n-1, low nibble first. Every frame stands
+ * alone, so a frame the device dropped on a congested link only loses its own 16 ms.
+ */
+export function decodeImaAdpcm(frame: Buffer): Buffer {
+  if (frame.length < 6) throw new Error('Invalid ADPCM frame');
+  const count = frame.readUInt16LE(0);
+  let predictor = frame.readInt16LE(2), index = frame[4];
+  if (!count || count > 2048 || index > 88 || frame.length !== 6 + Math.ceil((count - 1) / 2))
+    throw new Error('Invalid ADPCM frame');
+  const out = Buffer.alloc(count * 2);
+  out.writeInt16LE(predictor, 0);
+  for (let i = 1; i < count; i++) {
+    const byte = frame[6 + ((i - 1) >> 1)];
+    const code = (i & 1) ? byte & 0x0f : byte >> 4;
+    const step = ADPCM_STEP[index];
+    let delta = step >> 3;
+    if (code & 4) delta += step;
+    if (code & 2) delta += step >> 1;
+    if (code & 1) delta += step >> 2;
+    predictor = Math.max(-32768, Math.min(32767, predictor + (code & 8 ? -delta : delta)));
+    index = Math.max(0, Math.min(88, index + ADPCM_INDEX[code]));
+    out.writeInt16LE(predictor, i * 2);
+  }
+  return out;
+}
+
+/** Reference encoder matching the firmware (used by tests and the fake device). */
+export function encodeImaAdpcm(pcm: Buffer, startIndex = 0): { frame: Buffer; index: number } {
+  const count = pcm.length / 2;
+  const frame = Buffer.alloc(6 + Math.ceil((count - 1) / 2));
+  let predictor = pcm.readInt16LE(0), index = startIndex;
+  frame.writeUInt16LE(count, 0); frame.writeInt16LE(predictor, 2); frame[4] = index;
+  for (let i = 1; i < count; i++) {
+    const step = ADPCM_STEP[index];
+    let diff = pcm.readInt16LE(i * 2) - predictor, code = 0;
+    if (diff < 0) { code = 8; diff = -diff; }
+    let delta = step >> 3;
+    if (diff >= step) { code |= 4; diff -= step; delta += step; }
+    if (diff >= step >> 1) { code |= 2; diff -= step >> 1; delta += step >> 1; }
+    if (diff >= step >> 2) { code |= 1; delta += step >> 2; }
+    predictor = Math.max(-32768, Math.min(32767, predictor + (code & 8 ? -delta : delta)));
+    index = Math.max(0, Math.min(88, index + ADPCM_INDEX[code]));
+    const at = 6 + ((i - 1) >> 1);
+    frame[at] |= (i & 1) ? code : code << 4;
+  }
+  return { frame, index };
+}

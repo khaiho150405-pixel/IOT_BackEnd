@@ -163,7 +163,7 @@ Các bo mạch IoT giá rẻ hoặc các giải pháp mã nguồn mở trước 
 4. **Hiểu ý định bằng mô hình ngôn ngữ lớn:** Qwen 2.5 3B phân tích câu nói tự nhiên, code kiểm chứng trước khi điều khiển thiết bị.
 5. **Phản hồi tiếng nói và hiển thị trực quan Tiếng Việt:** Câu trả lời được đọc ra loa và hiển thị tiếng Việt có dấu trên OLED (Backend render bitmap); thanh trạng thái OLED cho biết hệ thống đang chờ gọi tên, đang nghe lệnh, đang thu âm, đang xử lý hay đang trả lời.
 6. **Xác nhận phần cứng (Hardware ACK):** Mọi lệnh điều khiển đèn chỉ được báo thành công khi ESP32 gửi xác nhận; lệnh chưa được xác nhận được tự gửi lại, đảm bảo trạng thái trên Web/MQTT khớp với thực tế.
-7. **Cấu hình Wi-Fi qua SoftAP Captive Portal:** Khi ESP32 không vào được backend, điểm phát `AIoT_Smart_Room` (192.168.4.1) được bật để nhập Wi-Fi, địa chỉ máy chủ và mã thiết bị từ điện thoại.
+7. **Cấu hình Wi-Fi qua SoftAP Captive Portal:** Khi ESP32 không vào được backend, điểm phát `AIoT_Smart_Room` (192.168.4.1) được bật để chọn Wi-Fi từ danh sách quét được và nhập mật khẩu trên điện thoại; thiết bị nhớ tối đa 5 mạng và tự vào mạng đã lưu có sóng mạnh nhất.
 8. **Giám sát và điều khiển đa nền tảng:** Web Dashboard và Mobile Web App (PWA) có tài khoản đăng nhập; khách không đăng nhập chỉ xem nhiệt độ, độ ẩm và trạng thái đèn; MQTT cho app di động và Home Assistant.
 9. **Truy cập an toàn qua Internet:** Tên miền cố định `https://aiot.eduscore.id.vn` qua đường hầm Cloudflare riêng, có HTTPS, không cần mở cổng router.
 
@@ -565,12 +565,13 @@ Hướng dẫn đầy đủ nằm trong `README.md` và `KHOI-DONG-THU-CONG.md` 
 4. **Tường lửa cho hotspot (chạy một lần bằng quyền Admin):** `scripts\fix-hotspot-firewall.ps1` (mở TCP 3100, 3443, 1883 và UDP 5353 cho dải `192.168.137.0/24`).
 5. **Tự khởi động:** `scripts\install-autostart.ps1 -StartNow` (không cần Admin). Từ đó, mỗi lần đăng nhập Windows: Ollama, Backend (cổng 3100, HTTPS 3443, MQTT 1883) và đường hầm Internet tự chạy.
 6. **Tên miền cố định (một lần):** `scripts\setup-named-tunnel.ps1 -Hostname aiot.eduscore.id.vn` (đăng nhập Cloudflare trên trình duyệt).
-7. **Mỗi lần dùng:** bật laptop, đăng nhập Windows, bật **Mobile Hotspot**, cấp nguồn ESP32. Kiểm tra: `http://127.0.0.1:3100/api/public/devices` có `"connected": true`.
+7. **Mỗi lần dùng:** bật laptop, đăng nhập Windows, cấp nguồn ESP32 (ESP32 vào Wi-Fi 2.4 GHz của router và kết nối qua tên miền; không cần Mobile Hotspot). Kiểm tra: `http://127.0.0.1:3100/api/public/devices` có `"connected": true`.
 
 ## Phụ lục 2: Nạp Firmware ESP32-S3 và cấu hình mạng
 1. Sao chép `include\config.example.h` thành `include\config.h`; điền Wi-Fi, `WS_HOST` (IP laptop), `WS_PORT=3100`, `WS_TOKEN` (trùng `DEVICE_TOKEN`), `WS_PUBLIC_HOST` (tên miền công khai).
 2. Mở dự án bằng VS Code + PlatformIO, nạp bằng lệnh `pio run -e esp32-s3-n16r8 -t upload --upload-port COMx`.
-3. Đổi mạng không cần nạp lại: nếu ESP32 không vào được backend 60 giây (hoặc sau khi giữ nút BOOT 3 giây), dùng điện thoại kết nối Wi-Fi **`AIoT_Smart_Room`**, trang cấu hình tự mở tại `192.168.4.1`; nhập Wi-Fi, địa chỉ máy chủ, mã thiết bị rồi nhấn **Lưu**.
+3. Đổi mạng không cần nạp lại: nếu ESP32 không vào được backend 60 giây (hoặc sau khi giữ nút BOOT 3 giây để xóa cấu hình), dùng điện thoại kết nối Wi-Fi **`AIoT_Smart_Room`**, trang cài đặt tự mở tại `192.168.4.1`; chạm chọn mạng **2.4 GHz**, nhập mật khẩu rồi nhấn **Lưu và kết nối**. Mỗi mạng chỉ cài một lần (nhớ tối đa 5 mạng).
+4. Không nên dùng Mobile Hotspot của laptop khi laptop đang vào Wi-Fi 5 GHz: card Wi-Fi phải nhảy băng tần liên tục, làm kết nối của ESP32 đứng hàng giây và rớt (đã đo: vòng lặp mạng chậm 104 lần/8 phút qua hotspot, 1 lần/8 phút qua Wi-Fi router).
 
 ## Phụ lục 3: Kết nối Home Assistant
 1. Tạo một tài khoản riêng cho Home Assistant trên dashboard.

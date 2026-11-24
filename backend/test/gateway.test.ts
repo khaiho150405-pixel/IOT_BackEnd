@@ -9,6 +9,7 @@ import { WebSocket } from 'ws';
 import { AiotGateway, authenticate } from '../src/aiot/aiot.gateway';
 import { AiotService, DecisionValue } from '../src/aiot/aiot.service';
 import { HistoryStore } from '../src/aiot/history';
+import { encodeImaAdpcm } from '../src/aiot/audio';
 
 async function until(check: () => boolean, timeout = 6000) {
   const start = Date.now();
@@ -433,5 +434,49 @@ test('spoken turns need the assistant name, except right after an answer', async
   const after = messages.filter(m => m.state === 'listening');
   assert.equal(after[3].follow_ms, 0, 'ignored talk opens no window');
   assert.ok(shown.includes('Gọi "Trợ lý ơi"\nđể ra lệnh nhé.'), 'back to the hint when the window ends');
+  ws.close();
+});
+
+test('a device announcing mic_codec ima_adpcm is understood like raw PCM', async t => {
+  process.env.DEVICE_TOKEN = 'adpcm-device-token-with-at-least-24-characters';
+  let heard: Buffer | undefined;
+  const ai = {
+    async analyze(pcm: Buffer): Promise<DecisionValue> {
+      heard = pcm;
+      return { transcript: 'Xin chào', language: 'vi', intent: 'chat', reply: 'Dạ.', trackId: '' };
+    },
+    async speak() { return Buffer.alloc(640); },
+  };
+  const http = createServer(), gateway = new AiotGateway(ai as unknown as AiotService, new HistoryStore());
+  gateway.attach(http); http.listen(0, '127.0.0.1'); await once(http, 'listening');
+  t.after(async () => { gateway.onModuleDestroy(); await new Promise<void>(resolve => http.close(() => resolve())); });
+  const ws = new WebSocket(`ws://127.0.0.1:${(http.address() as AddressInfo).port}/aiot`,
+    { headers: { Authorization: `Bearer ${process.env.DEVICE_TOKEN}` } });
+  const messages: any[] = [];
+  ws.on('message', (data, binary) => {
+    if (binary) return;
+    const m = JSON.parse(data.toString()); messages.push(m);
+    if (m.type === 'audio_end') ws.send(JSON.stringify({ type: 'playback_done', id: m.id }));
+  });
+  await once(ws, 'open');
+  ws.send(JSON.stringify({ type: 'hello', device_id: 'adpcm-device', mic_codec: 'ima_adpcm',
+    audio: { format: 'pcm_s16le', sample_rate: 16000, channels: 1 } }));
+  await until(() => messages.some(m => m.state === 'listening'));
+  // 0.48 s of a 400 Hz tone, then 1.6 s of silence, in 256-sample ADPCM frames like the firmware.
+  let index = 0, bytes = 0;
+  const frame = (voiced: boolean) => {
+    const pcm = Buffer.alloc(512);
+    if (voiced) for (let i = 0; i < 256; i++) pcm.writeInt16LE(Math.round(4000 * Math.sin(i * 2 * Math.PI * 400 / 16000)), i * 2);
+    const encoded = encodeImaAdpcm(pcm, index); index = encoded.index; bytes += encoded.frame.length;
+    ws.send(encoded.frame);
+  };
+  for (let i = 0; i < 30; i++) frame(true);
+  for (let i = 0; i < 100; i++) frame(false);
+  await until(() => !!heard);
+  assert.ok(bytes < 130 * 140, `~4x less uplink than PCM (${bytes} bytes for 130 frames)`);
+  let peak = 0;
+  for (let i = 0; i < heard!.length; i += 2) peak = Math.max(peak, Math.abs(heard!.readInt16LE(i)));
+  // The 120 Hz high-pass adds a short overshoot at the tone onset; a broken decoder would give ~0 or ~32767.
+  assert.ok(peak > 3000 && peak < 5500, `decoded speech keeps its level (peak ${peak})`);
   ws.close();
 });
