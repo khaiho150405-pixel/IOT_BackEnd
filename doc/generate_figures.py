@@ -46,11 +46,11 @@ def generate_fig_4_1():
         ("Micro I2S INMP441 (MEMS Audio In)", 
          "• ADC 24-bit Sigma-Delta, SNR 61 dB, Độ nhạy -26 dBFS\n• Bus I2S0: SCK (GPIO 5), WS (GPIO 4), SD (GPIO 6)\n• Nguồn 3.3V DC, L/R nối GND (Kênh trái 16kHz PCM16)", 86.5, '#0284c7'),
         ("DAC MAX98357A & Loa 3W 4Ω (Audio Out)", 
-         "• Mạch khuếch đại Class D 3.2W, Hiệu suất >92%\n• Bus I2S1: BCLK (GPIO 16), LRC (GPIO 15), DIN (GPIO 17)\n• Nguồn 5.0V DC (Ray dòng cao), Loa dynamic 4Ω dải 200Hz-15kHz", 73.5, '#d97706'),
+         "• Mạch khuếch đại Class D 3.2W, Hiệu suất >92%\n• Bus I2S1: LRC (GPIO 17), BCLK (GPIO 16), DIN (GPIO 15)\n• Nguồn 5.0V DC (thanh nguồn 5VIN), Loa dynamic 4Ω dải 200Hz-15kHz", 73.5, '#d97706'),
         ("Màn hình OLED SSD1306 0.96\" (Visual UI)", 
-         "• Độ phân giải 128x64 pixels, Giao tiếp I2C Fast Mode 400kHz\n• Chân: SDA (GPIO 8), SCL (GPIO 9), Địa chỉ 0x3C, Nguồn 3.3V\n• Giải thuật nén bitmap Tiếng Việt có dấu phân trang 128x28", 60.5, '#4f46e5'),
+         "• Độ phân giải 128x64 pixels, Giao tiếp I2C 100kHz (chống sọc)\n• Chân: SCL (GPIO 13), SDA (GPIO 14), Địa chỉ 0x3C, Nguồn 3.3V\n• Giải thuật nén bitmap Tiếng Việt có dấu phân trang 128x28", 60.5, '#4f46e5'),
         ("Cảm biến nhiệt ẩm DHT22 & Dải LED WS2812B", 
-         "• DHT22: Single-Bus GPIO 10 (Trở treo 4.7kΩ), Đọc chu kỳ 2s\n• WS2812B NeoPixel: DIN GPIO 11 (Trở đệm 330Ω), Nguồn 5.0V\n• Hiệu ứng ánh sáng: Thở Cyan (Chờ), Xanh (Nghe), Tím (Xử lý)", 47.5, '#059669'),
+         "• DHT22: Single-Bus GPIO 21 (Trở kéo 4.7-10kΩ), Đọc chu kỳ 2s\n• WS2812B NeoPixel: DIN GPIO 1, Nguồn 3.3V\n• Hiệu ứng: Thở Cyan (chưa kết nối), nhấp nháy khi loa nói", 47.5, '#059669'),
     ]
     for p_title, p_desc, py, p_col in periphs:
         ax.add_patch(patches.FancyBboxPatch((3.5, py-5.0), 40, 10, boxstyle="round,pad=0.4",
@@ -71,7 +71,7 @@ def generate_fig_4_1():
                                         edgecolor='#1d4ed8', facecolor='#ffffff', lw=1.2))
     ax.text(23.5, 41, "Xtensa® Dual-Core 32-bit LX7 (Xung nhịp 240 MHz)", 
             ha='center', va='center', fontsize=10, fontweight='bold', color='#1e3a8a')
-    ax.text(23.5, 36.5, "Core 0: Task Audio Network (WebSocket PCM16, MQTT, I2S FIFO)\nCore 1: Task Sensors & UI (Đọc DHT22 2s, FastLED, OLED Bitmap)", 
+    ax.text(23.5, 36.5, "Core 0: Task Audio Network (WebSocket ws/wss, cổng thu âm, I2S)\nCore 1: Task Sensors & UI (Đọc DHT22 2s, FastLED, OLED Bitmap)", 
             ha='center', va='center', fontsize=8.4, color='#334155')
 
     # Memory Subsystem
@@ -87,16 +87,16 @@ def generate_fig_4_1():
                                         edgecolor='#dc2626', facecolor='#ffffff', lw=1.2))
     ax.text(23.5, 15.5, "NGUỒN ĐIỆN & CẤU HÌNH WI-FI SOFTAP", 
             ha='center', va='center', fontsize=9.8, fontweight='bold', color='#b91c1c')
-    ax.text(23.5, 10.5, "• Nguồn Adapter 12V 1A qua MB-102: Ray 5V (Loa/LED) & 3.3V (Logic)\n• SoftAP 'AIoT_Smart_Room' (192.168.4.1 Captive Portal):\n  Cấu hình Wi-Fi/IP trực tiếp từ điện thoại khi giữ nút BOOT (GPIO 0)", 
+    ax.text(23.5, 10.5, "• Nguồn USB 5V: thanh 3V3 (Logic/Mic/OLED/LED) & 5VIN (Loa)\n• SoftAP 'AIoT_Smart_Room' (192.168.4.1) bật khi 60s không vào được\n  backend; giữ nút BOOT (GPIO 0) 3s để xóa cấu hình", 
             ha='center', va='center', fontsize=8.2, color='#1e293b')
 
     # -------------------------------------------------------------------------
     # KÊNH TRUYỀN THÔNG KÉP (COMMUNICATION BUS) - Middle (x: 45 to 55)
     # -------------------------------------------------------------------------
     buses = [
-        (82, "WebSocket (Port 3000)\nStream PCM16 16kHz", '#2563eb'),
+        (82, "WebSocket (Port 3100 / wss)\nStream PCM16 16kHz", '#2563eb'),
         (56, "MQTT Broker (Port 1883)\nTelemetry & Command", '#7c3aed'),
-        (25, "Web HTTP (Port 3000)\nDesk & Mobile App", '#059669')
+        (25, "Web HTTP 3100 / HTTPS\nDesk & Mobile App", '#059669')
     ]
     for by, b_txt, b_col in buses:
         ax.annotate("", xy=(55, by), xytext=(45, by),
@@ -114,11 +114,11 @@ def generate_fig_4_1():
 
     gw_items = [
         ("WebSocket Gateway (Streaming Server)", 
-         "• Xử lý luồng nhị phân PCM16 16kHz (256 mẫu/gói) liên tục\n• Cơ chế Half-Duplex Echo Prevention: Nhận 'playback_done' mở lại Mic\n• Điều phối Bitmap Tiếng Việt 128x28 truyền xuống OLED SSD1306", 86.5, '#059669'),
+         "• Nhận luồng PCM16 16kHz quanh tiếng nói (cổng thu âm ESP32)\n• Cơ chế Half-Duplex Echo Prevention: Nhận 'playback_done' mở lại Mic\n• Điều phối Bitmap Tiếng Việt 128x28 truyền xuống OLED SSD1306", 86.5, '#059669'),
         ("VAD Engine (Voice Activity Detection)", 
-         "• Tính năng lượng sóng âm RMS theo thời gian thực\n• Ngưỡng phát hiện tiếng nói: RMS >= 500 (Gom gói tin liên tục)\n• Ngưỡng ngắt câu thông minh: Khoảng lặng kéo dài >= 850ms", 73.5, '#047857'),
-        ("Fast Deterministic Routing Engine (< 10 ms)", 
-         "• Phân tích cú pháp tức thì: Bật/Tắt đèn LED, Nhiệt độ, Độ ẩm, Nhạc\n• Bắt buộc xác nhận phần cứng (Hardware ACK) trước khi cập nhật State", 60.5, '#b45309'),
+         "• Tính năng lượng sóng âm RMS theo thời gian thực\n• Ngưỡng phát hiện tiếng nói: RMS >= 160 (sau lọc 120Hz)\n• Chốt câu khi im lặng >= 1200ms; gọi tên 'Trợ lý ơi' + 10s nghe tiếp", 73.5, '#047857'),
+        ("Qwen hiểu ý định + Code kiểm chứng quyết định", 
+         "• Đèn chỉ đổi khi có động từ bật/tắt; số đo lấy từ cảm biến thật\n• Bắt buộc ACK phần cứng (tự gửi lại lệnh) trước khi cập nhật State", 60.5, '#b45309'),
         ("Embedded Aedes MQTT Broker (Port 1883)", 
          "• Nhúng trực tiếp trong Gateway, quản lý Topic: aiot/sensor, aiot/state,\n  aiot/chat, aiot/command; TypeORM + Fallback Circular 50 logs", 47.5, '#6d28d9'),
     ]
@@ -141,7 +141,7 @@ def generate_fig_4_1():
                                         edgecolor='#d97706', facecolor='#ffffff', lw=1.5))
     ax.text(76.5, 41, "1. LOCAL AI ENGINE (CHẾ ĐỘ MẶC ĐỊNH - 100% OFFLINE)", 
             ha='center', va='center', fontsize=9.8, fontweight='bold', color='#b45309')
-    ax.text(76.5, 32.5, "• Local LLM: Ollama (Qwen 2.5 3B / Llama 3.2 3B 4-bit, 35 tokens/s)\n• ASR Offline: Vosk Vietnamese Model / Faster-Whisper chuyển WAV -> Text\n• TTS Engine: Microsoft Edge-TTS (Voice HoaiMy/NamMinh) kèm fallback\n  sang pyttsx3 offline nếu hoàn toàn ngắt mạng\n-> Tự chủ 100%, bảo mật tuyệt đối âm thanh gia đình, chi phí vận hành 0đ", 
+    ax.text(76.5, 32.5, "• Local LLM: Ollama Qwen 2.5 3B trên GPU (~0,6s/câu khi đã làm nóng)\n• ASR Offline: PhoWhisper-base (CTranslate2 int8, CPU) WAV -> Text\n• TTS Engine: Microsoft Edge-TTS (HoaiMy) khi có mạng, dự phòng\n  giọng Windows offline 'Microsoft An'\n-> Tự chủ 100%, bảo mật tuyệt đối âm thanh gia đình, chi phí vận hành 0đ", 
             ha='center', va='center', fontsize=8.2, color='#1e293b')
 
     # Sub-block B: Cloud AI
@@ -149,7 +149,7 @@ def generate_fig_4_1():
                                         edgecolor='#f59e0b', facecolor='#ffffff', lw=1.2))
     ax.text(76.5, 17.5, "2. CLOUD AI ENGINE (CHẾ ĐỘ MỞ RỘNG TÙY CHỌN)", 
             ha='center', va='center', fontsize=9.8, fontweight='bold', color='#92400e')
-    ax.text(76.5, 10.5, "• Google Gemini 2.5 Flash API (SDK @google/genai)\n• Audio Multimodal Native: Gửi trực tiếp file âm thanh WAV lên máy chủ\n• Gemini TTS Preview: Sinh tiếng nói trực tiếp model 'Kore'", 
+    ax.text(76.5, 10.5, "• Google Gemini API (bật bằng AI_PROVIDER=gemini)\n• Audio Multimodal Native: Gửi trực tiếp file âm thanh WAV lên máy chủ\n• Gemini TTS Preview: Sinh tiếng nói trực tiếp model 'Kore'", 
             ha='center', va='center', fontsize=8.2, color='#1e293b')
 
     # Connection arrow between Gateway and AI
@@ -190,9 +190,9 @@ def generate_fig_4_2():
     steps = [
         (85, 9, 28, "1. Phát âm lệnh thoại ('Bật đèn' / 'Nhiệt độ phòng' / 'Hôm nay trời lạnh')", '#2563eb', '->'),
         (78, 28, 50, "2. INMP441 số hóa I2S -> Stream PCM16 16kHz (256 mẫu/gói = 512B) qua WebSocket", '#2563eb', '->'),
-        (71, 50, 50, "3. VAD tính năng lượng RMS: RMS >= 500 gom mẫu, cắt câu sau 850ms khoảng lặng", '#059669', 'loop'),
+        (71, 50, 50, "3. VAD tính năng lượng RMS: RMS >= 160 gom mẫu, chốt câu sau 1200ms im lặng", '#059669', 'loop'),
         (64, 50, 28, "4. Gửi gói tin cập nhật màn hình OLED: {'type': 'oled_status', 'status': 'DANG_XU_LY'}", '#059669', '->'),
-        (57, 50, 73, "5. Fast Route (<10ms) với lệnh thiết bị; hoặc gửi prompt vào Local Ollama (Qwen 2.5 3B)", '#d97706', '->'),
+        (57, 50, 73, "5. Nhận tên \"Trợ lý ơi\", gửi yêu cầu cho Qwen 2.5 3B, code kiểm chứng quyết định", '#d97706', '->'),
         (50, 73, 50, "6. AI phân tích ngữ cảnh mờ -> Trả về JSON: {'intent': 'led_on', 'reply': 'Dạ em bật đèn rồi ạ'}", '#d97706', '->'),
         (43, 50, 28, "7. Gửi lệnh phần cứng qua WS: {'type': 'command', 'device': 'led', 'action': 'on'}", '#2563eb', '->'),
         (36, 28, 50, "8. ESP32 kích hoạt dải LED WS2812B -> Bắt buộc gửi ACK: {'type': 'ack', 'enabled': true}", '#2563eb', '->'),
@@ -235,14 +235,14 @@ def generate_fig_4_3():
     # 1. Power Supply Board (Left: x: 2 to 24, y: 35 to 97)
     ax.add_patch(patches.FancyBboxPatch((2, 35), 23, 62, boxstyle="round,pad=0.8", 
                                         edgecolor='#dc2626', facecolor='#fef2f2', linewidth=2))
-    ax.text(13.5, 93, "BỘ NGUỒN CHUYÊN DỤNG\n(Adapter 12V 1A + MB-102)", 
+    ax.text(13.5, 93, "NGUỒN CẤP\n(USB 5V vào ESP32)", 
             ha='center', va='center', fontsize=10.5, fontweight='bold', color='#b91c1c')
-    ax.text(13.5, 87, "DC Jack 12V 1A Input\n-> Công tắc nguồn & Đèn LED báo\n-> 2 bộ IC ổn áp LDO AMS1117", 
+    ax.text(13.5, 87, "Củ sạc 5V >= 2A qua cổng USB\n-> Thanh nguồn 3V3 (logic, mic, OLED, LED)\n-> Thanh nguồn 5VIN (ampli MAX98357A)", 
             ha='center', va='center', fontsize=8, color='#334155')
 
     rails = [
-        ("Ray Nguồn 3.3V DC (Nguồn sạch)", "Cấp ESP32, INMP441, OLED, DHT22", 76, '#dc2626'),
-        ("Ray Nguồn 5.0V DC (Dòng cao)", "Cấp Loa MAX98357A & LED WS2812B", 59, '#b45309'),
+        ("Ray Nguồn 3.3V DC (Nguồn sạch)", "Cấp INMP441, OLED, DHT22, LED WS2812B", 76, '#dc2626'),
+        ("Ray Nguồn 5.0V DC (Dòng cao)", "Cấp ampli Loa MAX98357A", 59, '#b45309'),
         ("Ray Mass GND (Chung toàn mạch)", "Nối mass toàn bộ hệ thống chung", 43, '#334155'),
     ]
     for r_title, r_desc, ry, rcol in rails:
@@ -263,16 +263,16 @@ def generate_fig_4_3():
             ha='center', va='center', fontsize=11, fontweight='bold', color='#1e40af')
 
     pins = [
-        ("GPIO 10", "DATA Single-Bus (Trở kéo 4.7kΩ lên 3.3V)", 83.5),
+        ("GPIO 21", "DATA Single-Bus DHT22 (trở kéo 4.7-10kΩ)", 83.5),
         ("GPIO 04", "I2S0 WS / LRCK (Word Select 16kHz)", 75.0),
         ("GPIO 05", "I2S0 SCK / BCLK (Bit Clock)", 66.5),
         ("GPIO 06", "I2S0 SD / DATA IN (Dòng âm thanh Mic)", 58.0),
-        ("GPIO 08", "I2C SDA (Data Line màn hình OLED)", 49.5),
-        ("GPIO 09", "I2C SCL (Clock Line 400kHz OLED)", 41.0),
-        ("GPIO 11", "PWM DIN (Trở hạn dòng 330Ω dải LED)", 32.5),
-        ("GPIO 15", "I2S1 LRC / WS (Word Select Loa)", 24.0),
+        ("GPIO 14", "I2C SDA (Data Line màn hình OLED)", 49.5),
+        ("GPIO 13", "I2C SCL (Clock Line 100kHz OLED)", 41.0),
+        ("GPIO 01", "DIN dữ liệu LED WS2812B", 32.5),
+        ("GPIO 17", "I2S1 LRC / WS (Word Select Loa)", 24.0),
         ("GPIO 16", "I2S1 BCLK (Bit Clock phát loa)", 15.5),
-        ("GPIO 17", "I2S1 DIN (Dòng dữ liệu âm thanh Loa)", 7.0),
+        ("GPIO 15", "I2S1 DIN (Dòng dữ liệu âm thanh Loa)", 7.0),
     ]
 
     for p_name, p_sig, y in pins:
@@ -285,15 +285,15 @@ def generate_fig_4_3():
     # 3. Right Peripherals Modules (x: 71 to 98)
     modules = [
         ("Cảm biến nhiệt ẩm DHT22 (AM2302)", 83.5, 
-         "• Chân: Pin 1 (VCC: 3.3V), Pin 2 (DATA: GPIO 10),\n  Pin 4 (GND: Mass chung)\n• Điện trở kéo Pull-up 4.7kΩ nối giữa DATA và 3.3V", '#059669'),
+         "• Chân: Pin 1 (VCC: 3.3V), Pin 2 (DATA: GPIO 21),\n  Pin 4 (GND: Mass chung)\n• Điện trở kéo Pull-up 4.7-10kΩ nối giữa DATA và 3.3V", '#059669'),
         ("Micro kỹ thuật số I2S INMP441", 66.5, 
          "• Chân: VDD (3.3V), GND, L/R (nối GND chọn kênh trái)\n• Chân I2S: WS (GPIO 4), SCK (GPIO 5), SD (GPIO 6)\n• Tín hiệu số nguyên bản chống nhiễu điện từ", '#0284c7'),
         ("Màn hình hiển thị OLED SSD1306 0.96\"", 45.2, 
-         "• Chân: VCC (3.3V), GND, SDA (GPIO 8), SCL (GPIO 9)\n• Chuẩn I2C Fast Mode 400kHz, Địa chỉ: 0x3C\n• Bộ đệm Bitmap tiếng Việt có dấu phân trang 128x28", '#4f46e5'),
+         "• Chân: VCC (3.3V), GND, SCL (GPIO 13), SDA (GPIO 14)\n• Chuẩn I2C 100kHz, Địa chỉ: 0x3C\n• Bộ đệm Bitmap tiếng Việt có dấu phân trang 128x28", '#4f46e5'),
         ("Dải Đèn LED RGB WS2812B NeoPixel", 32.5, 
-         "• Chân: VCC (5.0V dòng cao), GND, DIN (GPIO 11)\n• Điện trở đệm 330Ω mắc nối tiếp đường DIN chống dội xung\n• Tụ hóa 100uF mắc song song chân nguồn 5V lọc phẳng", '#db2777'),
+         "• Chân: VCC (3.3V), GND, DIN (GPIO 1), DOUT để trống\n• Mức logic 3.3V khớp ESP32, không cần chuyển mức\n• Mô hình dùng 1 bóng làm đèn phòng", '#db2777'),
         ("Mạch DAC & Loa MAX98357A (Loa 3W 4Ω)", 15.5, 
-         "• Chân: VIN (5.0V dòng cao), GND, SD_MODE (để hở / bật)\n• Chân I2S: LRC (GPIO 15), BCLK (GPIO 16), DIN (GPIO 17)\n• Đầu ra OUT+ và OUT- nối cuộn dây Loa 3W 4Ω màng rung", '#d97706'),
+         "• Chân: VIN (5.0V), GND, GAIN & SD để trống (bật, 9dB)\n• Chân I2S: LRC (GPIO 17), BCLK (GPIO 16), DIN (GPIO 15)\n• Đầu ra OUT+ và OUT- nối cuộn dây Loa 3W 4Ω màng rung", '#d97706'),
     ]
 
     for m_title, y, detail, col in modules:
@@ -334,7 +334,7 @@ def generate_fig_5_1():
     # Step 3: Wi-Fi Decision Diamond
     ax.add_patch(patches.Polygon([[50, 72], [68, 66], [50, 60], [32, 66]], closed=True, 
                                  facecolor='#fef3c7', edgecolor='#f59e0b', lw=2))
-    ax.text(50, 66, "Kết nối Wi-Fi (15s)?\n(Hoặc nhấn giữ nút BOOT)", ha='center', va='center', fontsize=9.2, fontweight='bold', color='#92400e')
+    ax.text(50, 66, "Vào được backend (60s)?\n(Giữ BOOT 3s: xóa cấu hình)", ha='center', va='center', fontsize=9.2, fontweight='bold', color='#92400e')
 
     # Branch No -> SoftAP Captive Portal
     ax.annotate("", xy=(22, 66), xytext=(32, 66), arrowprops=dict(arrowstyle="->", lw=2))
@@ -351,14 +351,14 @@ def generate_fig_5_1():
 
     # Step 4: Standby Execution Box
     ax.add_patch(patches.Rectangle((18, 44), 64, 8, facecolor='#eff6ff', edgecolor='#3b82f6', lw=2))
-    ax.text(50, 48, "CHẾ ĐỘ CHỜ (STANDBY - LẮNG NGHE THỜI GIAN THỰC)\nĐèn Neon Cyan thở, OLED hiện nhiệt ẩm, Micro I2S stream mẫu nhị phân", 
+    ax.text(50, 48, "CHẾ ĐỘ CHỜ: OLED hiện nhiệt ẩm + thanh trạng thái \"Goi: Tro ly oi\"\nCổng thu âm ESP32 chỉ gửi âm thanh khi có tiếng nói", 
             ha='center', va='center', fontsize=9.5, fontweight='bold', color='#1d4ed8')
     ax.annotate("", xy=(50, 37), xytext=(50, 44), arrowprops=dict(arrowstyle="->", lw=2))
 
     # Step 5: Sound Detected Decision Diamond
     ax.add_patch(patches.Polygon([[50, 37], [68, 31], [50, 25], [32, 31]], closed=True, 
                                  facecolor='#fef3c7', edgecolor='#f59e0b', lw=2))
-    ax.text(50, 31, "Phát hiện tiếng nói?\n(Năng lượng RMS >= 500)", ha='center', va='center', fontsize=9.2, fontweight='bold', color='#92400e')
+    ax.text(50, 31, "Phát hiện tiếng nói?\n(Cổng thu âm + VAD RMS >= 160)", ha='center', va='center', fontsize=9.2, fontweight='bold', color='#92400e')
 
     # Side branch: Periodic sensor push
     ax.annotate("", xy=(84, 31), xytext=(68, 31), arrowprops=dict(arrowstyle="->", lw=1.8))
@@ -370,13 +370,13 @@ def generate_fig_5_1():
 
     # Sound Detected -> Process Branch
     ax.annotate("", xy=(50, 18), xytext=(50, 25), arrowprops=dict(arrowstyle="->", lw=2))
-    ax.text(52, 21.5, "Có tiếng nói (VAD cắt sau 850ms)", ha='left', va='center', fontsize=8.8, fontweight='bold', color='#15803d')
+    ax.text(52, 21.5, "Có tiếng nói (chốt câu sau 1200ms)", ha='left', va='center', fontsize=8.8, fontweight='bold', color='#15803d')
 
     # Step 6: Processing & Execution
     ax.add_patch(patches.Rectangle((12, 2), 76, 16, facecolor='#f5f3ff', edgecolor='#8b5cf6', lw=2))
-    ax.text(50, 13.5, "XỬ LÝ INTENT: Fast Route (<10ms) với lệnh đèn/nhiệt ẩm; Local Ollama (Qwen 2.5 3B) với ngữ cảnh mờ\nThực thi phần cứng: Bật/Tắt LED WS2812B -> Bắt buộc nhận xác nhận ACK từ ESP32\nHiển thị trực quan: Render Bitmap tiếng Việt có dấu 128x28 OLED + Stream TTS ra Loa MAX98357A", 
+    ax.text(50, 13.5, "XỬ LÝ: Có gọi tên \"Trợ lý ơi\" (hoặc trong 10s nghe tiếp)? -> PhoWhisper -> Qwen 2.5 3B -> code kiểm chứng\nThực thi phần cứng: Bật/Tắt LED WS2812B -> Bắt buộc ACK từ ESP32 (tự gửi lại lệnh)\nHiển thị trực quan: Render Bitmap tiếng Việt có dấu 128x28 OLED + Stream TTS ra Loa MAX98357A", 
             ha='center', va='center', fontsize=8.8, fontweight='bold', color='#5b21b6')
-    ax.text(50, 6.5, "CƠ CHẾ CHỐNG LẶP ÂM HALF-DUPLEX: ESP32 Mute Micro INMP441 trong lúc phát Loa\nChỉ mở lại Micro khi nhận thông điệp 'playback_done' -> Triệt tiêu 100% hiện tượng tự dội âm", 
+    ax.text(50, 6.5, "CƠ CHẾ CHỐNG LẶP ÂM HALF-DUPLEX: ESP32 Mute Micro INMP441 trong lúc phát Loa\nChỉ mở lại Micro khi nhận thông điệp 'playback_done' -> Ngăn hiện tượng tự dội âm", 
             ha='center', va='center', fontsize=8.4, color='#b91c1c')
 
     # Loop back to Standby
@@ -415,7 +415,7 @@ def generate_fig_5_2():
     ax.add_patch(patches.FancyBboxPatch((12, 70), 45, 13, boxstyle="round,pad=0.4", 
                                         edgecolor='#f59e0b', facecolor='#ffffff', linewidth=1.5))
     ax.text(34.5, 78, "Dải Đèn LED RGB WS2812B NeoPixel (Chiếu sáng chính)", ha='center', va='center', fontsize=9.8, fontweight='bold', color='#0f172a')
-    ax.text(34.5, 73.5, "• Máng nhôm tản nhiệt âm trần kèm nắp nhựa mờ tán quang\n• Hiệu ứng ánh sáng: Thở Cyan / Chớp nháy báo trạng thái nói / Đèn ngủ", ha='center', va='center', fontsize=8.2, color='#475569')
+    ax.text(34.5, 73.5, "• Máng nhôm tản nhiệt âm trần kèm nắp nhựa mờ tán quang\n• Hiệu ứng ánh sáng: Thở Cyan khi chưa kết nối / Nhấp nháy khi loa nói", ha='center', va='center', fontsize=8.2, color='#475569')
 
     # DHT22 Box
     ax.add_patch(patches.FancyBboxPatch((60, 70), 28, 13, boxstyle="round,pad=0.4", 
